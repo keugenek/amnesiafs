@@ -64,6 +64,7 @@ class VirtualAIHandler:
         "query": VirtualNodeType.QUERY,
         "summary": VirtualNodeType.SUMMARY,
         "related": VirtualNodeType.RELATED,
+        "similar": VirtualNodeType.DIRECTORY,  # Embedding-based similarity search
         "by-topic": VirtualNodeType.DIRECTORY,
         "by-date": VirtualNodeType.DIRECTORY,
         "chat": VirtualNodeType.CHAT,
@@ -156,6 +157,8 @@ class VirtualAIHandler:
             return self._getattr_related(target_path)
         elif subdir == "chat":
             return self._getattr_chat(target_path, parts)
+        elif subdir == "similar":
+            return self._getattr_similar(target_path, parts)
         elif subdir == "by-topic":
             return self._getattr_by_topic(target_path, parts)
         elif subdir == "by-date":
@@ -189,6 +192,8 @@ class VirtualAIHandler:
             return self._readdir_by_date(target_path)
         elif subdir == "graph":
             return self._readdir_graph(target_path)
+        elif subdir == "similar":
+            return self._readdir_similar(target_path)
         elif subdir in ("summary", "related"):
             # These mirror the real filesystem structure
             return self._readdir_mirror(target_path)
@@ -218,6 +223,8 @@ class VirtualAIHandler:
             content = self._read_chat(target_path, parts)
         elif subdir == "graph":
             content = self._read_graph(target_path, parts)
+        elif subdir == "similar":
+            content = self._read_similar(target_path, parts)
 
         return content[offset:offset + size]
 
@@ -813,3 +820,164 @@ class VirtualAIHandler:
 
         entries = self.cognitivefs._read_directory_entries(inode)
         return [e.name for e in entries if e.name not in (".", "..")]
+
+    # ==================== Similar (embedding-based) operations ====================
+
+    def _getattr_similar(self, target_path: str, parts: List[str]) -> Optional[Dict]:
+        """Get attributes for similar paths (embedding-based similarity search)."""
+        now = int(time.time())
+
+        # /.ai/similar/ - directory listing available queries
+        if not target_path:
+            return self._make_dir_stat(now)
+
+        # Reject temp files and other editor artifacts
+        if target_path.endswith('.tmp') or target_path.startswith('~'):
+            return None  # File not found
+
+        # /.ai/similar/<query> - return a placeholder size (actual content computed on read)
+        # Don't compute embeddings here - too expensive for getattr
+        return self._make_file_stat(4096, now)  # Placeholder size
+
+    def _readdir_similar(self, target_path: str) -> List[str]:
+        """Read directory for similar searches."""
+        if not target_path:
+            # Return recent queries or example searches
+            return ["_help.txt"]
+        return []
+
+    def _read_similar(self, target_path: str, parts: List[str]) -> bytes:
+        """
+        Read similar files based on embedding similarity.
+
+        Usage:
+            cat /.ai/similar/_help.txt          - Show help
+            cat /.ai/similar/<query>            - Find files similar to query text
+            cat /.ai/similar/path/to/file.txt   - Find files similar to given file
+        """
+        if not target_path:
+            return b""
+
+        if target_path == "_help.txt":
+            return self._get_similar_help()
+
+        # Check if it's a query for similar files to an existing file
+        if self.cognitivefs:
+            inode = self.cognitivefs._resolve_path("/" + target_path)
+            if inode:
+                return self._find_similar_to_file("/" + target_path)
+
+        # Otherwise treat as a query string
+        query_text = target_path.replace("_", " ").replace("-", " ")
+        return self._find_similar_to_query(query_text)
+
+    def _get_similar_help(self) -> bytes:
+        """Return help text for similarity search."""
+        help_text = """# Embedding-Based Similarity Search
+
+## Usage
+
+Find files similar to a query:
+    cat /.ai/similar/machine_learning
+    cat /.ai/similar/neural-networks
+
+Find files similar to an existing file:
+    cat /.ai/similar/path/to/file.txt
+
+## How it works
+
+1. Files are embedded using sentence-transformers (all-MiniLM-L6-v2)
+2. Your query is also embedded
+3. Cosine similarity finds the most similar files
+
+## Notes
+
+- Embeddings are generated when files are written
+- Query words separated by _ or - become spaces
+- Results show similarity scores (0-1, higher = more similar)
+"""
+        return help_text.encode('utf-8')
+
+    def _find_similar_to_query(self, query: str) -> bytes:
+        """Find files similar to a text query using embeddings."""
+        if not self.knowledge_graph:
+            return b"Knowledge graph not initialized.\n"
+
+        # Check if processor is available for embedding generation
+        if not self.cognitivefs or not self.cognitivefs.processor:
+            return b"Processor not available for embedding generation.\n"
+
+        if not self.cognitivefs.processor.embedding_generator.is_available:
+            return b"Embeddings not available. Install sentence-transformers.\n"
+
+        # Generate query embedding
+        query_vec = self.cognitivefs.processor.embedding_generator.generate(query)
+        if not query_vec:
+            return b"Failed to generate query embedding.\n"
+
+        # Get all file embeddings and compute similarity
+        return self._compute_similarities(query, query_vec)
+
+    def _find_similar_to_file(self, file_path: str) -> bytes:
+        """Find files similar to an existing file."""
+        if not self.knowledge_graph:
+            return b"Knowledge graph not initialized.\n"
+
+        # Get file record
+        file_record = self.knowledge_graph.get_file(file_path)
+        if not file_record:
+            return f"File not indexed: {file_path}\n".encode('utf-8')
+
+        if not file_record.embedding_id:
+            return f"No embedding for file: {file_path}\n".encode('utf-8')
+
+        # Get file embedding
+        file_emb = self.knowledge_graph.get_embedding(file_id=file_record.id)
+        if not file_emb or not file_emb.vector:
+            return f"Embedding not found for: {file_path}\n".encode('utf-8')
+
+        return self._compute_similarities(f"files similar to {file_path}", file_emb.vector)
+
+    def _compute_similarities(self, query_desc: str, query_vec: bytes) -> bytes:
+        """Compute similarities between query vector and all file embeddings."""
+        from .embedder import cosine_similarity
+
+        # Get all files with embeddings
+        cursor = self.knowledge_graph.conn.cursor()
+        cursor.execute("""
+            SELECT f.path, f.summary, e.vector
+            FROM files f
+            JOIN embeddings e ON f.embedding_id = e.id
+            WHERE e.vector IS NOT NULL
+        """)
+
+        results = []
+        for row in cursor.fetchall():
+            path = row['path']
+            summary = row['summary'] or ""
+            file_vec = row['vector']
+
+            # Compute similarity
+            sim = cosine_similarity(query_vec, file_vec)
+            results.append((sim, path, summary))
+
+        # Sort by similarity (descending)
+        results.sort(reverse=True, key=lambda x: x[0])
+
+        # Format output
+        lines = [
+            f"# Files similar to: {query_desc}",
+            f"# Found {len(results)} files with embeddings",
+            ""
+        ]
+
+        if not results:
+            lines.append("No files with embeddings found.")
+            lines.append("Write some files to generate embeddings.")
+        else:
+            for sim, path, summary in results[:20]:  # Top 20
+                lines.append(f"[{sim:.3f}] {path}")
+                if summary:
+                    lines.append(f"        {summary[:80]}")
+
+        return "\n".join(lines).encode('utf-8')
