@@ -85,9 +85,11 @@ def main():
     if sys.platform == 'win32':
         import ctypes
         if not ctypes.windll.shell32.IsUserAnAdmin():
-            print("WARNING: Not running as Administrator!")
+            print("ERROR: Not running as Administrator!")
             print("Physical drive access requires admin privileges.")
-            print("Please run this command in an elevated terminal.\n")
+            print("\nTo fix: Right-click PowerShell -> 'Run as administrator'")
+            print("Then run: python tools/mount.py", args.device, args.mountpoint)
+            return 1
 
     print(f"Mounting CognitiveFS...")
     print(f"  Device: {args.device}")

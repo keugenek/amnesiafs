@@ -153,6 +153,8 @@ class CognitiveFS(Operations):
         self.superblock = Superblock.unpack(superblock_data)
 
         if not self.superblock.is_valid():
+            self._log(f"Invalid superblock! Magic={self.superblock.magic}, Version={self.superblock.version}")
+            self._log("This usually means the device wasn't opened with admin privileges")
             raise FuseOSError(errno.EIO)
 
         # Update mount time
