@@ -35,6 +35,7 @@ except ImportError:
 
 from .blockdev import BlockDevice, BlockDeviceError
 from .diskformat import Superblock, Inode, InodeType, InodeFlags, AllocationBitmap, BLOCK_SIZE
+from .virtual_ai import VirtualAIHandler
 
 
 # Directory entry format: inode_num (8 bytes) + name_len (2 bytes) + name (variable)
@@ -132,6 +133,9 @@ class CognitiveFS(Operations):
 
         # Root directory inode
         self.ROOT_INODE = 1
+
+        # Virtual AI directory handler
+        self.virtual_ai = VirtualAIHandler(self)
 
     def init(self, path):
         """Initialize filesystem on mount."""
@@ -460,6 +464,13 @@ class CognitiveFS(Operations):
         """Get file attributes."""
         self._log(f"getattr: {path}")
 
+        # Handle virtual /.ai/ paths
+        if self.virtual_ai.is_ai_path(path):
+            result = self.virtual_ai.getattr(path)
+            if result:
+                return result
+            raise FuseOSError(errno.ENOENT)
+
         inode = self._resolve_path(path)
         if not inode:
             raise FuseOSError(errno.ENOENT)
@@ -495,6 +506,12 @@ class CognitiveFS(Operations):
         """Read directory contents."""
         self._log(f"readdir: {path}")
 
+        # Handle virtual /.ai/ paths
+        if self.virtual_ai.is_ai_path(path):
+            entries = ['.', '..']
+            entries.extend(self.virtual_ai.readdir(path))
+            return entries
+
         inode = self._resolve_path(path)
         if not inode:
             raise FuseOSError(errno.ENOENT)
@@ -506,6 +523,10 @@ class CognitiveFS(Operations):
 
         for entry in self._read_directory(inode):
             entries.append(entry.name)
+
+        # Add .ai virtual directory to root
+        if path == "/" or path == "":
+            entries.append(".ai")
 
         return entries
 
@@ -584,6 +605,12 @@ class CognitiveFS(Operations):
     def unlink(self, path):
         """Remove file."""
         self._log(f"unlink: {path}")
+
+        # Handle virtual /.ai/ paths
+        if self.virtual_ai.is_ai_path(path):
+            if self.virtual_ai.unlink(path):
+                return
+            raise FuseOSError(errno.EPERM)
 
         inode = self._resolve_path(path)
         if not inode:
@@ -702,6 +729,14 @@ class CognitiveFS(Operations):
         """Open file."""
         self._log(f"open: {path} flags={flags}")
 
+        # Handle virtual /.ai/ paths
+        if self.virtual_ai.is_ai_path(path):
+            # Verify the virtual file exists
+            if self.virtual_ai.getattr(path):
+                self.fh_counter += 1
+                return self.fh_counter
+            raise FuseOSError(errno.ENOENT)
+
         inode = self._resolve_path(path)
         if not inode:
             raise FuseOSError(errno.ENOENT)
@@ -718,6 +753,13 @@ class CognitiveFS(Operations):
     def create(self, path, mode, fi=None):
         """Create and open file."""
         self._log(f"create: {path} mode={oct(mode)}")
+
+        # Handle virtual /.ai/ paths
+        if self.virtual_ai.is_ai_path(path):
+            if self.virtual_ai.create(path, mode):
+                self.fh_counter += 1
+                return self.fh_counter
+            raise FuseOSError(errno.EPERM)
 
         parent_inode, name = self._resolve_parent(path)
         if not parent_inode:
@@ -766,6 +808,10 @@ class CognitiveFS(Operations):
         """Read from file."""
         self._log(f"read: {path} size={size} offset={offset} fh={fh}")
 
+        # Handle virtual /.ai/ paths
+        if self.virtual_ai.is_ai_path(path):
+            return self.virtual_ai.read(path, size, offset)
+
         if fh not in self.open_files:
             raise FuseOSError(errno.EBADF)
 
@@ -781,6 +827,10 @@ class CognitiveFS(Operations):
     def write(self, path, data, offset, fh):
         """Write to file."""
         self._log(f"write: {path} len={len(data)} offset={offset} fh={fh}")
+
+        # Handle virtual /.ai/ paths
+        if self.virtual_ai.is_ai_path(path):
+            return self.virtual_ai.write(path, data, offset)
 
         if fh not in self.open_files:
             raise FuseOSError(errno.EBADF)
