@@ -881,3 +881,171 @@ class KnowledgeGraph:
             current_level = next_level
 
         return results
+
+    # ==================== Processing Queue Operations ====================
+
+    def queue_operation(self, file_id: int, operation: str,
+                       priority: int = 0) -> int:
+        """
+        Add operation to processing queue.
+
+        Args:
+            file_id: ID of file to process
+            operation: Operation type ('index', 'embed', 'extract', 'summarize')
+            priority: Higher priority = processed first
+
+        Returns:
+            Queue item ID
+        """
+        cursor = self.conn.cursor()
+        now = time.time()
+
+        cursor.execute("""
+            INSERT INTO processing_queue (file_id, operation, priority, status, created_at)
+            VALUES (?, ?, ?, 'pending', ?)
+        """, (file_id, operation, priority, now))
+
+        self.conn.commit()
+        return cursor.lastrowid
+
+    def get_pending_operations(self, limit: int = 10) -> List[Dict]:
+        """
+        Get pending operations from queue.
+
+        Returns oldest pending items first, sorted by priority.
+
+        Args:
+            limit: Maximum items to return
+
+        Returns:
+            List of queue items as dicts
+        """
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            SELECT * FROM processing_queue
+            WHERE status = 'pending'
+            ORDER BY priority DESC, created_at ASC
+            LIMIT ?
+        """, (limit,))
+
+        return [dict(row) for row in cursor.fetchall()]
+
+    def mark_operation_processing(self, queue_id: int):
+        """Mark operation as being processed."""
+        cursor = self.conn.cursor()
+        now = time.time()
+
+        cursor.execute("""
+            UPDATE processing_queue
+            SET status = 'processing', started_at = ?
+            WHERE id = ?
+        """, (now, queue_id))
+
+        self.conn.commit()
+
+    def mark_operation_completed(self, queue_id: int):
+        """Mark operation as completed."""
+        cursor = self.conn.cursor()
+        now = time.time()
+
+        cursor.execute("""
+            UPDATE processing_queue
+            SET status = 'completed', completed_at = ?
+            WHERE id = ?
+        """, (now, queue_id))
+
+        self.conn.commit()
+
+    def mark_operation_failed(self, queue_id: int, error: str):
+        """Mark operation as failed with error message."""
+        cursor = self.conn.cursor()
+        now = time.time()
+
+        cursor.execute("""
+            UPDATE processing_queue
+            SET status = 'failed', completed_at = ?, error_message = ?
+            WHERE id = ?
+        """, (now, error, queue_id))
+
+        self.conn.commit()
+
+    def update_file_extraction(self, file_id: int, extracted_text: str,
+                              content_hash: str, summary: str = ""):
+        """
+        Update file with extraction results.
+
+        Args:
+            file_id: File ID to update
+            extracted_text: Extracted text content
+            content_hash: SHA-256 hash of content
+            summary: Optional summary text
+        """
+        cursor = self.conn.cursor()
+        now = time.time()
+
+        cursor.execute("""
+            UPDATE files
+            SET extracted_text = ?, content_hash = ?, summary = ?,
+                indexed_at = ?
+            WHERE id = ?
+        """, (extracted_text, content_hash, summary, now, file_id))
+
+        self.conn.commit()
+
+    def set_file_embedding(self, file_id: int, embedding_id: int):
+        """Link file to its embedding."""
+        cursor = self.conn.cursor()
+
+        cursor.execute("""
+            UPDATE files SET embedding_id = ? WHERE id = ?
+        """, (embedding_id, file_id))
+
+        self.conn.commit()
+
+    def get_queue_stats(self) -> Dict[str, int]:
+        """Get processing queue statistics."""
+        cursor = self.conn.cursor()
+
+        cursor.execute("""
+            SELECT status, COUNT(*) as count
+            FROM processing_queue
+            GROUP BY status
+        """)
+
+        stats = {'pending': 0, 'processing': 0, 'completed': 0, 'failed': 0}
+        for row in cursor.fetchall():
+            stats[row['status']] = row['count']
+
+        return stats
+
+    def clear_completed_queue(self, older_than_hours: int = 24):
+        """
+        Clear completed queue items older than specified hours.
+
+        Args:
+            older_than_hours: Remove items completed more than this many hours ago
+        """
+        cursor = self.conn.cursor()
+        cutoff = time.time() - (older_than_hours * 3600)
+
+        cursor.execute("""
+            DELETE FROM processing_queue
+            WHERE status = 'completed' AND completed_at < ?
+        """, (cutoff,))
+
+        self.conn.commit()
+        return cursor.rowcount
+
+    def retry_failed_operations(self):
+        """Reset failed operations to pending for retry."""
+        cursor = self.conn.cursor()
+
+        cursor.execute("""
+            UPDATE processing_queue
+            SET status = 'pending', error_message = NULL,
+                started_at = NULL, completed_at = NULL
+            WHERE status = 'failed'
+        """)
+
+        self.conn.commit()
+        return cursor.rowcount

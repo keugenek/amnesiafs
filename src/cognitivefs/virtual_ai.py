@@ -363,6 +363,18 @@ class VirtualAIHandler:
             kg_stats = self.knowledge_graph.get_stats()
             status["knowledge_graph"] = kg_stats
 
+            # Add processing queue stats
+            queue_stats = self.knowledge_graph.get_queue_stats()
+            status["processing_queue"] = queue_stats
+
+        # Add processor status if available
+        if self.cognitivefs and self.cognitivefs.processor:
+            proc_stats = self.cognitivefs.processor.get_stats()
+            status["processor"] = {
+                "running": proc_stats.get("running", False),
+                "embedding_available": proc_stats.get("embedding_available", False),
+            }
+
         return json.dumps(status, indent=2).encode('utf-8') + b"\n"
 
     # ==================== Query operations ====================

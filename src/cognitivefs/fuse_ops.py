@@ -138,6 +138,9 @@ class CognitiveFS(Operations):
         # Knowledge graph
         self.knowledge_graph: Optional[KnowledgeGraph] = None
 
+        # Background processor for knowledge extraction
+        self.processor = None
+
         # Virtual AI directory handler
         self.virtual_ai = VirtualAIHandler(self)
 
@@ -188,6 +191,12 @@ class CognitiveFS(Operations):
         """Cleanup on unmount."""
         self._log("Unmounting CognitiveFS")
 
+        # Stop background processor
+        if self.processor:
+            self._log("Stopping background processor")
+            self.processor.stop()
+            self.processor = None
+
         # Close knowledge graph
         if self.knowledge_graph:
             self.knowledge_graph.close()
@@ -218,6 +227,27 @@ class CognitiveFS(Operations):
 
         # Connect to virtual AI handler
         self.virtual_ai.knowledge_graph = self.knowledge_graph
+
+        # Initialize background processor for knowledge extraction
+        self._init_processor()
+
+    def _init_processor(self):
+        """Initialize the background processor for knowledge extraction."""
+        try:
+            from .processor import BackgroundProcessor
+            from .extractor import ContentExtractor
+            from .embedder import EmbeddingGenerator
+
+            self.processor = BackgroundProcessor(
+                knowledge_graph=self.knowledge_graph,
+                content_extractor=ContentExtractor(),
+                embedding_generator=EmbeddingGenerator()
+            )
+            self.processor.start()
+            self._log("Background processor started")
+        except Exception as e:
+            self._log(f"Warning: Failed to start background processor: {e}")
+            self.processor = None
 
     def _log(self, msg: str):
         """Debug logging."""
@@ -922,8 +952,35 @@ class CognitiveFS(Operations):
         """Close file."""
         self._log(f"release: {path} fh={fh}")
         if fh in self.open_files:
+            inode_num, flags = self.open_files[fh]
+
+            # Queue for knowledge extraction if file was modified
+            if flags & (os.O_WRONLY | os.O_RDWR):
+                self._queue_for_extraction(path, inode_num)
+
             del self.open_files[fh]
         return 0
+
+    def _queue_for_extraction(self, path: str, inode_num: int):
+        """Queue file for knowledge extraction."""
+        # Skip virtual /.ai/ paths
+        if path.startswith('/.ai/') or path.startswith('\\.ai\\'):
+            return
+
+        # Skip if no processor
+        if not self.processor:
+            return
+
+        try:
+            inode = self._read_inode(inode_num)
+            if inode and inode.size > 0:
+                # Read file data
+                data = self._read_file_data(inode)
+                if data:
+                    self._log(f"Queuing for extraction: {path} ({len(data)} bytes)")
+                    self.processor.queue_file(path, inode_num, data)
+        except Exception as e:
+            self._log(f"Failed to queue {path} for extraction: {e}")
 
     def fsync(self, path, datasync, fh):
         """Sync file."""
