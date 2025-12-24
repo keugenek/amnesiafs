@@ -15,10 +15,11 @@ from typing import Optional, List, Dict, Tuple
 from pathlib import Path
 
 try:
-    from fuse import FUSE, Operations, FuseOSError
+    # Prefer refuse for better Windows/WinFsp support
+    from refuse.high import FUSE, Operations, FuseOSError
 except ImportError:
     try:
-        from refuse.high import FUSE, Operations, FuseOSError
+        from fuse import FUSE, Operations, FuseOSError
     except ImportError:
         # Fallback - define minimal interface for development
         class FuseOSError(OSError):
@@ -891,7 +892,7 @@ def mount_cognitivefs(device_path: str, mount_point: str, debug: bool = False, f
 
     Args:
         device_path: Path to block device
-        mount_point: Mount point directory
+        mount_point: Mount point directory (or drive letter on Windows like "X:")
         debug: Enable debug output
         foreground: Run in foreground (required for debugging)
     """
@@ -899,8 +900,14 @@ def mount_cognitivefs(device_path: str, mount_point: str, debug: bool = False, f
         print("ERROR: FUSE library not installed. Install with: pip install fusepy")
         sys.exit(1)
 
-    # Ensure mount point exists
-    os.makedirs(mount_point, exist_ok=True)
+    # Ensure mount point exists (skip for Windows drive letters)
+    is_drive_letter = (sys.platform == 'win32' and
+                       len(mount_point) <= 3 and
+                       mount_point[0].isalpha() and
+                       (len(mount_point) == 1 or mount_point[1] == ':'))
+
+    if not is_drive_letter:
+        os.makedirs(mount_point, exist_ok=True)
 
     # Create FUSE operations
     operations = CognitiveFS(device_path, debug=debug)

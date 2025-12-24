@@ -81,6 +81,14 @@ def main():
     else:
         os.makedirs(args.mountpoint, exist_ok=True)
 
+    # Check for admin privileges on Windows
+    if sys.platform == 'win32':
+        import ctypes
+        if not ctypes.windll.shell32.IsUserAnAdmin():
+            print("WARNING: Not running as Administrator!")
+            print("Physical drive access requires admin privileges.")
+            print("Please run this command in an elevated terminal.\n")
+
     print(f"Mounting CognitiveFS...")
     print(f"  Device: {args.device}")
     print(f"  Mount point: {args.mountpoint}")
@@ -99,6 +107,9 @@ def main():
         return 0
     except Exception as e:
         print(f"Error: {e}")
+        if "Access denied" in str(e) or "Access is denied" in str(e):
+            print("\nHint: Run this command as Administrator:")
+            print(f"  python tools/mount.py {args.device} {args.mountpoint}")
         return 1
 
     return 0

@@ -280,6 +280,9 @@ class Inode:
         # Pad to INODE_SIZE
         return data.ljust(self.INODE_SIZE, b'\x00')
 
+    # Struct format size: 18+24+16+96+24+32+24+72+40+2 = 348 bytes
+    STRUCT_SIZE = 348
+
     @classmethod
     def unpack(cls, data: bytes) -> 'Inode':
         """Deserialize inode from bytes."""
@@ -294,7 +297,7 @@ class Inode:
             '64s8s'
             'Q32s'
             'H',
-            data[:cls.INODE_SIZE]
+            data[:cls.STRUCT_SIZE]
         )
 
         return cls(
