@@ -733,6 +733,10 @@ class CognitiveFS(Operations):
 
         self._add_directory_entry(new_parent, new_name, inode.inode_num)
 
+        # Update knowledge graph with new path
+        if self.knowledge_graph:
+            self.knowledge_graph.rename_file(old, new)
+
         return 0
 
     def chmod(self, path, mode):

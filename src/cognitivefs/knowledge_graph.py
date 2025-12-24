@@ -451,6 +451,12 @@ class KnowledgeGraph:
         cursor.execute("DELETE FROM files WHERE path = ?", (path,))
         self.conn.commit()
 
+    def rename_file(self, old_path: str, new_path: str):
+        """Update file path in knowledge graph after rename."""
+        cursor = self.conn.cursor()
+        cursor.execute("UPDATE files SET path = ? WHERE path = ?", (new_path, old_path))
+        self.conn.commit()
+
     def search_files(self, query: str, limit: int = 20) -> List[FileRecord]:
         """Full-text search for files."""
         cursor = self.conn.cursor()
