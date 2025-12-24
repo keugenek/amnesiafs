@@ -705,6 +705,10 @@ class CognitiveFS(Operations):
         else:
             self._write_inode(inode)
 
+        # Remove from knowledge graph
+        if self.knowledge_graph:
+            self.knowledge_graph.delete_file(path)
+
         return 0
 
     def rename(self, old, new):
@@ -944,6 +948,9 @@ class CognitiveFS(Operations):
         self._write_file_data_to_inode(inode, data)
         inode.modified_at = int(time.time())
         self._write_inode(inode)
+
+        # Queue for re-extraction since content changed
+        self._queue_for_extraction(path, inode.inode_num)
 
         return 0
 
