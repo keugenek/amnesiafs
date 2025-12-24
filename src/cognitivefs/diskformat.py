@@ -491,6 +491,9 @@ def calculate_layout(device_size: int) -> Dict[str, Any]:
     """
     Calculate filesystem layout for a given device size.
 
+    Scales dynamically based on device size - designed for 128GB reference,
+    but works with smaller images for testing.
+
     Args:
         device_size: Total device size in bytes
 
@@ -498,23 +501,50 @@ def calculate_layout(device_size: int) -> Dict[str, Any]:
         Dictionary with layout information
     """
     total_blocks = device_size // BLOCK_SIZE
+    REFERENCE_SIZE = 128 * 1024 * 1024 * 1024  # 128GB reference
 
-    # Reserve last 1% for journal
-    journal_blocks = max(16384, total_blocks // 100)  # Min 64MB
-    data_blocks_end = total_blocks - journal_blocks
+    # Use fixed layout for devices >= 128GB, scale for smaller
+    if device_size >= REFERENCE_SIZE:
+        # Original fixed layout for full-size devices
+        bitmap_blocks = BITMAP_BLOCKS
+        inode_blocks = INODE_TABLE_BLOCKS
+        kg_blocks = KNOWLEDGE_GRAPH_BLOCKS
+        embed_blocks = EMBEDDING_STORE_BLOCKS
+        version_blocks = VERSION_STORE_BLOCKS
+    else:
+        # Scale proportionally for smaller devices
+        scale = device_size / REFERENCE_SIZE
 
-    data_blocks_available = data_blocks_end - DATA_BLOCKS_START_BLOCK
+        # Minimum sizes for each region (in blocks)
+        bitmap_blocks = max(256, int(BITMAP_BLOCKS * scale))  # Min 1MB
+        inode_blocks = max(256, int(INODE_TABLE_BLOCKS * scale))  # Min 1MB
+        kg_blocks = max(256, int(KNOWLEDGE_GRAPH_BLOCKS * scale))  # Min 1MB
+        embed_blocks = max(256, int(EMBEDDING_STORE_BLOCKS * scale))  # Min 1MB
+        version_blocks = max(256, int(VERSION_STORE_BLOCKS * scale))  # Min 1MB
+
+    # Calculate start positions
+    bitmap_start = 1  # After superblock
+    inode_start = bitmap_start + bitmap_blocks
+    kg_start = inode_start + inode_blocks
+    embed_start = kg_start + kg_blocks
+    version_start = embed_start + embed_blocks
+    data_start = version_start + version_blocks
+
+    # Journal at the end (1% or min 256 blocks = 1MB)
+    journal_blocks = max(256, total_blocks // 100)
+    data_end = total_blocks - journal_blocks
+    data_blocks = max(0, data_end - data_start)
 
     return {
         'device_size': device_size,
         'total_blocks': total_blocks,
         'block_size': BLOCK_SIZE,
-        'superblock': (SUPERBLOCK_BLOCK, 1),
-        'bitmap': (BITMAP_START_BLOCK, BITMAP_BLOCKS),
-        'inode_table': (INODE_TABLE_START_BLOCK, INODE_TABLE_BLOCKS),
-        'knowledge_graph': (KNOWLEDGE_GRAPH_START_BLOCK, KNOWLEDGE_GRAPH_BLOCKS),
-        'embedding_store': (EMBEDDING_STORE_START_BLOCK, EMBEDDING_STORE_BLOCKS),
-        'version_store': (VERSION_STORE_START_BLOCK, VERSION_STORE_BLOCKS),
-        'data_blocks': (DATA_BLOCKS_START_BLOCK, data_blocks_available),
-        'journal': (data_blocks_end, journal_blocks),
+        'superblock': (0, 1),
+        'bitmap': (bitmap_start, bitmap_blocks),
+        'inode_table': (inode_start, inode_blocks),
+        'knowledge_graph': (kg_start, kg_blocks),
+        'embedding_store': (embed_start, embed_blocks),
+        'version_store': (version_start, version_blocks),
+        'data_blocks': (data_start, data_blocks),
+        'journal': (data_end, journal_blocks),
     }

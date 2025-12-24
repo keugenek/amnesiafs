@@ -9,3 +9,4 @@ build/
 .env
 .venv/
 run_format.ps1
+test.img

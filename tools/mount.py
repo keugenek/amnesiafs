@@ -81,8 +81,9 @@ def main():
     else:
         os.makedirs(args.mountpoint, exist_ok=True)
 
-    # Check for admin privileges on Windows
-    if sys.platform == 'win32':
+    # Check for admin privileges on Windows (only for physical devices)
+    is_physical_device = args.device.startswith("\\\\.\\") or args.device.startswith("/dev/")
+    if sys.platform == 'win32' and is_physical_device:
         import ctypes
         if not ctypes.windll.shell32.IsUserAnAdmin():
             print("ERROR: Not running as Administrator!")

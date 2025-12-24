@@ -42,31 +42,57 @@ def get_device_size_wmi(device_path: str) -> int:
     return 0
 
 
-def format_device(device_path: str, force: bool = False):
+def create_image_file(path: str, size_bytes: int):
+    """Create an empty image file."""
+    print(f"Creating image file: {path} ({size_bytes / 1e9:.2f} GB)")
+    with open(path, 'wb') as f:
+        # Write in chunks to avoid memory issues
+        chunk_size = 1024 * 1024 * 10  # 10MB chunks
+        remaining = size_bytes
+        while remaining > 0:
+            write_size = min(chunk_size, remaining)
+            f.write(b'\x00' * write_size)
+            remaining -= write_size
+    print("Image file created.")
+
+
+def format_device(device_path: str, force: bool = False, image_size: int = 0):
     """
     Format a device with CognitiveFS.
 
     Args:
-        device_path: Path to device
+        device_path: Path to device or image file
         force: Skip confirmation prompt
+        image_size: If > 0, create image file of this size
     """
     print("=" * 70)
     print("CognitiveFS Device Formatter")
     print("=" * 70)
 
-    # Get device size via WMI first (more reliable on Windows)
-    device_size = get_device_size_wmi(device_path)
+    # Check if this is an image file (not a physical device)
+    is_image = not device_path.startswith("\\\\.\\") and not device_path.startswith("/dev/")
 
-    # Open device to verify access
-    try:
-        device = BlockDevice(device_path, read_only=True)
-        device.open()
-        if device.size > 0:
-            device_size = device.size
-        device.close()
-    except BlockDeviceError as e:
-        print(f"Error: {e}")
-        return False
+    if is_image and image_size > 0:
+        # Create new image file
+        create_image_file(device_path, image_size)
+        device_size = image_size
+    elif is_image and os.path.exists(device_path):
+        # Existing image file
+        device_size = os.path.getsize(device_path)
+    else:
+        # Physical device - get size via WMI
+        device_size = get_device_size_wmi(device_path)
+
+        # Open device to verify access
+        try:
+            device = BlockDevice(device_path, read_only=True)
+            device.open()
+            if device.size > 0:
+                device_size = device.size
+            device.close()
+        except BlockDeviceError as e:
+            print(f"Error: {e}")
+            return False
 
     if device_size == 0:
         print(f"Error: Could not determine size of {device_path}")
@@ -117,6 +143,19 @@ def format_device(device_path: str, force: bool = False):
         superblock.mounted_at = 0
         superblock.last_check = superblock.created_at
         superblock.uuid = uuid.uuid4().bytes
+
+        # Set all layout pointers from calculated layout
+        superblock.bitmap_start = layout['bitmap'][0]
+        superblock.bitmap_blocks = layout['bitmap'][1]
+        superblock.inode_table_start = layout['inode_table'][0]
+        superblock.inode_table_blocks = layout['inode_table'][1]
+        superblock.knowledge_graph_start = layout['knowledge_graph'][0]
+        superblock.knowledge_graph_blocks = layout['knowledge_graph'][1]
+        superblock.embedding_store_start = layout['embedding_store'][0]
+        superblock.embedding_store_blocks = layout['embedding_store'][1]
+        superblock.version_store_start = layout['version_store'][0]
+        superblock.version_store_blocks = layout['version_store'][1]
+        superblock.data_blocks_start = layout['data_blocks'][0]
         superblock.journal_start = layout['journal'][0]
         superblock.journal_blocks = layout['journal'][1]
 
@@ -262,6 +301,12 @@ def main():
         help='Skip confirmation prompt'
     )
 
+    parser.add_argument(
+        '--size',
+        type=str,
+        help='Size for image file (e.g., 1G, 500M, 1073741824). Creates new image if specified.'
+    )
+
     args = parser.parse_args()
 
     if args.list:
@@ -274,7 +319,20 @@ def main():
         list_devices()
         return 1
 
-    success = format_device(args.device, force=args.force)
+    # Parse size argument
+    image_size = 0
+    if args.size:
+        size_str = args.size.upper().strip()
+        if size_str.endswith('G'):
+            image_size = int(float(size_str[:-1]) * 1024 * 1024 * 1024)
+        elif size_str.endswith('M'):
+            image_size = int(float(size_str[:-1]) * 1024 * 1024)
+        elif size_str.endswith('K'):
+            image_size = int(float(size_str[:-1]) * 1024)
+        else:
+            image_size = int(size_str)
+
+    success = format_device(args.device, force=args.force, image_size=image_size)
     return 0 if success else 1
 
 

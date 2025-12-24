@@ -248,9 +248,11 @@ class CognitiveFS(Operations):
 
     def _allocate_block(self) -> int:
         """Allocate a new data block."""
-        block = self.bitmap.allocate_next()
+        # Find a free block starting from data blocks region
+        block = self.bitmap.find_free_block(self.superblock.data_blocks_start)
         if block is None:
             raise FuseOSError(errno.ENOSPC)
+        self.bitmap.allocate(block)
         self.superblock.free_blocks -= 1
         return block
 
