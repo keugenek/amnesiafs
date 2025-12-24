@@ -654,6 +654,11 @@ class VirtualAIHandler:
             path = row['path']
             if exclude_path and path == exclude_path:
                 continue
+
+            # Verify file still exists on disk
+            if self.cognitivefs and not self.cognitivefs._resolve_path(path):
+                continue
+
             summary = row['summary'] or ""
             file_vec = row['vector']
             sim = cosine_similarity(query_vec, file_vec)
@@ -698,6 +703,9 @@ class VirtualAIHandler:
         results = []
         for row in cursor.fetchall():
             path = row['path']
+            # Verify file still exists on disk
+            if self.cognitivefs and not self.cognitivefs._resolve_path(path):
+                continue
             shared = row['shared_entities'].split(",") if row['shared_entities'] else []
             results.append((path, shared))
 
@@ -1263,6 +1271,11 @@ Find files similar to an existing file:
         results = []
         for row in cursor.fetchall():
             path = row['path']
+
+            # Verify file still exists on disk
+            if self.cognitivefs and not self.cognitivefs._resolve_path(path):
+                continue
+
             summary = row['summary'] or ""
             file_vec = row['vector']
 
