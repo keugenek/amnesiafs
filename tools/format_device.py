@@ -22,6 +22,26 @@ from cognitivefs.diskformat import (
 )
 
 
+def get_device_size_wmi(device_path: str) -> int:
+    """Get device size via WMI (works without opening device)."""
+    import sys
+    if sys.platform != 'win32':
+        return 0
+    try:
+        import wmi
+        import re
+        match = re.search(r'PhysicalDrive(\d+)', device_path)
+        if match:
+            drive_num = int(match.group(1))
+            c = wmi.WMI()
+            for disk in c.Win32_DiskDrive():
+                if disk.Index == drive_num:
+                    return int(disk.Size) if disk.Size else 0
+    except Exception as e:
+        print(f"WMI error: {e}")
+    return 0
+
+
 def format_device(device_path: str, force: bool = False):
     """
     Format a device with CognitiveFS.
@@ -34,14 +54,22 @@ def format_device(device_path: str, force: bool = False):
     print("CognitiveFS Device Formatter")
     print("=" * 70)
 
-    # Open device
+    # Get device size via WMI first (more reliable on Windows)
+    device_size = get_device_size_wmi(device_path)
+
+    # Open device to verify access
     try:
         device = BlockDevice(device_path, read_only=True)
         device.open()
-        device_size = device.size
+        if device.size > 0:
+            device_size = device.size
         device.close()
     except BlockDeviceError as e:
         print(f"Error: {e}")
+        return False
+
+    if device_size == 0:
+        print(f"Error: Could not determine size of {device_path}")
         return False
 
     # Calculate layout
@@ -77,6 +105,9 @@ def format_device(device_path: str, force: bool = False):
         # Open device for writing
         device = BlockDevice(device_path, read_only=False)
         device.open()
+        # Override size with pre-computed WMI value
+        if device.size == 0:
+            device.size = device_size
 
         # 1. Create and write superblock
         print("  [1/5] Writing superblock...")
@@ -216,7 +247,7 @@ def main():
     parser.add_argument(
         'device',
         nargs='?',
-        help='Device path (e.g., \\\\.\\\PhysicalDrive1 or /dev/sdb)'
+        help=r'Device path (e.g., \\.\PhysicalDrive1 or /dev/sdb)'
     )
 
     parser.add_argument(

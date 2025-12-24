@@ -112,8 +112,8 @@ class Superblock:
             '<8sIIQ'  # magic, version, block_size, total_blocks
             'QQQ'     # created_at, mounted_at, last_check
             'Q'       # flags
-            'QQQQQQQQQQQQQQ'  # layout pointers
-            'QQQ'     # stats
+            'QQQQQQQQQQQQQ'  # 13 layout pointers
+            'QQQ'     # stats: free_blocks, free_inodes, total_inodes
             '16s',    # uuid
             self.magic,
             self.version,
@@ -148,7 +148,8 @@ class Superblock:
     @classmethod
     def unpack(cls, data: bytes) -> 'Superblock':
         """Deserialize superblock from bytes."""
-        fields = struct.unpack('<8sIIQQQQQQQQQQQQQQQQQQQQQQQ16s', data[:256])
+        # Format: 8s(8) + II(8) + 21 Q's(168) + 16s(16) = 200 bytes, 25 fields
+        fields = struct.unpack('<8sIIQQQQQQQQQQQQQQQQQQQQQ16s', data[:200])
 
         return cls(
             magic=fields[0],

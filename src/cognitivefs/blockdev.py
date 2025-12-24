@@ -136,26 +136,40 @@ class BlockDevice:
     def _get_device_size(self):
         """Determine device size."""
         if sys.platform == 'win32':
-            try:
-                # Use IOCTL_DISK_GET_DRIVE_GEOMETRY_EX for physical drives
-                if self._is_physical_device:
-                    import winioctlcon
+            if self._is_physical_device:
+                # Use WMI first - most reliable on Windows
+                self.size = self._get_size_via_wmi()
+                if self.size > 0:
+                    return
+
+                # Fallback to IOCTL
+                try:
+                    IOCTL_DISK_GET_DRIVE_GEOMETRY_EX = 0x000700A0
                     geometry = win32file.DeviceIoControl(
                         self.handle,
-                        winioctlcon.IOCTL_DISK_GET_DRIVE_GEOMETRY_EX,
+                        IOCTL_DISK_GET_DRIVE_GEOMETRY_EX,
                         None,
                         1024
                     )
-                    # Parse DISK_GEOMETRY_EX structure
                     self.size = struct.unpack('<Q', geometry[24:32])[0]
-                else:
-                    # Regular file
+                except Exception:
+                    try:
+                        IOCTL_DISK_GET_LENGTH_INFO = 0x0007405C
+                        length_info = win32file.DeviceIoControl(
+                            self.handle,
+                            IOCTL_DISK_GET_LENGTH_INFO,
+                            None,
+                            8
+                        )
+                        self.size = struct.unpack('<Q', length_info)[0]
+                    except Exception:
+                        self.size = 0
+            else:
+                # Regular file
+                try:
                     self.size = win32file.GetFileSize(self.handle)
-            except Exception as e:
-                # Fallback to seeking
-                win32file.SetFilePointer(self.handle, 0, win32file.FILE_END)
-                self.size = win32file.SetFilePointer(self.handle, 0, win32file.FILE_CURRENT)
-                win32file.SetFilePointer(self.handle, 0, win32file.FILE_BEGIN)
+                except Exception:
+                    self.size = 0
         else:
             # POSIX
             if self._is_physical_device:
@@ -174,6 +188,23 @@ class BlockDevice:
             else:
                 self.size = os.lseek(self.handle, 0, os.SEEK_END)
                 os.lseek(self.handle, 0, os.SEEK_SET)
+
+    def _get_size_via_wmi(self) -> int:
+        """Get device size via WMI (Windows fallback)."""
+        try:
+            import wmi
+            import re
+            # Extract drive number from path like \\.\PhysicalDrive1 or \.\PhysicalDrive1
+            match = re.search(r'PhysicalDrive(\d+)', self.device_path)
+            if match:
+                drive_num = int(match.group(1))
+                c = wmi.WMI()
+                for disk in c.Win32_DiskDrive():
+                    if disk.Index == drive_num:
+                        return int(disk.Size) if disk.Size else 0
+        except Exception:
+            pass
+        return 0
 
     def close(self):
         """Close the device."""
