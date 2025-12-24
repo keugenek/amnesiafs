@@ -358,6 +358,11 @@ class VirtualAIHandler:
             "knowledge_graph_loaded": self.knowledge_graph is not None,
         })
 
+        # Add knowledge graph statistics if available
+        if self.knowledge_graph:
+            kg_stats = self.knowledge_graph.get_stats()
+            status["knowledge_graph"] = kg_stats
+
         return json.dumps(status, indent=2).encode('utf-8') + b"\n"
 
     # ==================== Query operations ====================
@@ -729,18 +734,55 @@ class VirtualAIHandler:
 
     def _get_graph_content(self, query_type: str) -> bytes:
         """Get knowledge graph data."""
+        if not self.knowledge_graph:
+            if query_type == "stats":
+                return json.dumps({"status": "not_initialized"}, indent=2).encode('utf-8') + b"\n"
+            return b"Knowledge graph not initialized.\n"
+
         if query_type == "stats":
-            stats = {
-                "status": "not_initialized",
-                "entities": 0,
-                "relationships": 0,
-                "files_indexed": 0,
-            }
+            stats = self.knowledge_graph.get_stats()
+            stats["status"] = "initialized"
             return json.dumps(stats, indent=2).encode('utf-8') + b"\n"
+
         elif query_type == "entities":
-            return b"# Entities\n\nNo entities indexed yet.\n"
+            lines = ["# Entities in Knowledge Graph", ""]
+
+            # Get entities by type
+            from .knowledge_graph import EntityType
+            for et in EntityType:
+                entities = self.knowledge_graph.get_entities_by_type(et, limit=50)
+                if entities:
+                    lines.append(f"## {et.value.title()} ({len(entities)})")
+                    for e in entities[:20]:
+                        lines.append(f"  - {e.name} (refs: {e.source_count})")
+                    if len(entities) > 20:
+                        lines.append(f"  ... and {len(entities) - 20} more")
+                    lines.append("")
+
+            if len(lines) == 2:
+                lines.append("No entities indexed yet.")
+
+            return "\n".join(lines).encode('utf-8')
+
         elif query_type == "relationships":
-            return b"# Relationships\n\nNo relationships indexed yet.\n"
+            lines = ["# Relationships in Knowledge Graph", ""]
+
+            # Get stats by relationship type
+            stats = self.knowledge_graph.get_stats()
+            rel_count = stats.get('relationships', 0)
+
+            if rel_count == 0:
+                lines.append("No relationships indexed yet.")
+            else:
+                lines.append(f"Total relationships: {rel_count}")
+                lines.append("")
+                lines.append("Relationship types are discovered through:")
+                lines.append("  - Entity co-occurrence in files")
+                lines.append("  - Explicit references and links")
+                lines.append("  - Semantic similarity")
+
+            return "\n".join(lines).encode('utf-8')
+
         return b""
 
     # ==================== Mirror operations ====================

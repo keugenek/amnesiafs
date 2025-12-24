@@ -36,6 +36,7 @@ except ImportError:
 from .blockdev import BlockDevice, BlockDeviceError
 from .diskformat import Superblock, Inode, InodeType, InodeFlags, AllocationBitmap, BLOCK_SIZE
 from .virtual_ai import VirtualAIHandler
+from .knowledge_graph import KnowledgeGraph, FileRecord, Entity, EntityType
 
 
 # Directory entry format: inode_num (8 bytes) + name_len (2 bytes) + name (variable)
@@ -134,6 +135,9 @@ class CognitiveFS(Operations):
         # Root directory inode
         self.ROOT_INODE = 1
 
+        # Knowledge graph
+        self.knowledge_graph: Optional[KnowledgeGraph] = None
+
         # Virtual AI directory handler
         self.virtual_ai = VirtualAIHandler(self)
 
@@ -175,17 +179,45 @@ class CognitiveFS(Operations):
         if not root_inode:
             raise FuseOSError(errno.EIO)
 
+        # Initialize knowledge graph
+        self._init_knowledge_graph()
+
         self._log(f"Filesystem mounted successfully (UUID: {self.superblock.uuid.hex()})")
 
     def destroy(self, path):
         """Cleanup on unmount."""
         self._log("Unmounting CognitiveFS")
 
+        # Close knowledge graph
+        if self.knowledge_graph:
+            self.knowledge_graph.close()
+            self.knowledge_graph = None
+
         if self.device:
             # Write back any cached data
             self._flush_all()
             self.device.sync()
             self.device.close()
+
+    def _init_knowledge_graph(self):
+        """Initialize the knowledge graph database."""
+        # Store KG database alongside the device/image
+        if self.device_path.endswith('.img'):
+            kg_path = self.device_path.replace('.img', '.kg.db')
+        else:
+            # For physical devices, store in user's data directory
+            import os
+            uuid_hex = self.superblock.uuid.hex()
+            data_dir = os.path.join(os.path.expanduser('~'), '.cognitivefs')
+            os.makedirs(data_dir, exist_ok=True)
+            kg_path = os.path.join(data_dir, f'{uuid_hex}.kg.db')
+
+        self._log(f"Opening knowledge graph at {kg_path}")
+        self.knowledge_graph = KnowledgeGraph(kg_path)
+        self.knowledge_graph.open()
+
+        # Connect to virtual AI handler
+        self.virtual_ai.knowledge_graph = self.knowledge_graph
 
     def _log(self, msg: str):
         """Debug logging."""

@@ -10,3 +10,6 @@ build/
 .venv/
 run_format.ps1
 test.img
+*.kg.db
+*.kg.db-shm
+*.kg.db-wal
