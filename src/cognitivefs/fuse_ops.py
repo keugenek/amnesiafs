@@ -846,6 +846,25 @@ class CognitiveFS(Operations):
         return 0
 
     # ============================================
+    # FUSE Operations - Access Control
+    # ============================================
+
+    def access(self, path, amode):
+        """Check file access permissions."""
+        self._log(f"access: {path} mode={amode}")
+        # Allow all access for now
+        inode = self._resolve_path(path)
+        if not inode:
+            raise FuseOSError(errno.ENOENT)
+        return 0
+
+    def mknod(self, path, mode, dev):
+        """Create a file node (used by some FUSE implementations instead of create)."""
+        self._log(f"mknod: {path} mode={oct(mode)}")
+        # Delegate to create
+        return self.create(path, mode)
+
+    # ============================================
     # FUSE Operations - Extended Attributes
     # ============================================
 
@@ -923,9 +942,10 @@ def mount_cognitivefs(device_path: str, mount_point: str, debug: bool = False, f
 
     # Platform-specific options
     if sys.platform == 'win32':
-        # WinFsp options
+        # WinFsp options for full read/write access
         fuse_kwargs.update({
             'volname': 'CognitiveFS',
+            'umask': 0,  # Allow all permissions
         })
 
     try:
