@@ -13,3 +13,4 @@ test.img
 *.kg.db
 *.kg.db-shm
 *.kg.db-wal
+brain.img

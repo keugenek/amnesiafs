@@ -1511,10 +1511,12 @@ Output:
             return self._get_similar_help()
 
         # Check if it's a query for similar files to an existing file
+        # target_path already starts with / from parse_ai_path
         if self.cognitivefs:
-            inode = self.cognitivefs._resolve_path("/" + target_path)
+            file_path = target_path if target_path.startswith("/") else "/" + target_path
+            inode = self.cognitivefs._resolve_path(file_path)
             if inode:
-                return self._find_similar_to_file("/" + target_path)
+                return self._find_similar_to_file(file_path)
 
         # Otherwise treat as a query string
         query_text = target_path.replace("_", " ").replace("-", " ")
