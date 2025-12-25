@@ -934,6 +934,11 @@ class CognitiveFS(Operations):
         """Truncate file."""
         self._log(f"truncate: {path} length={length}")
 
+        # Handle virtual /.ai/ paths - allow truncate for writable virtual files
+        if self.virtual_ai.is_ai_path(path):
+            # Virtual files like query sessions can be truncated (cleared)
+            return 0
+
         inode = self._resolve_path(path)
         if not inode:
             raise FuseOSError(errno.ENOENT)

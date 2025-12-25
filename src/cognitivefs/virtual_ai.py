@@ -317,10 +317,11 @@ class VirtualAIHandler:
             'st_blksize': 4096,
         }
 
-    def _make_file_stat(self, size: int, mtime: int) -> Dict:
+    def _make_file_stat(self, size: int, mtime: int, writable: bool = False) -> Dict:
         """Create stat dict for a file."""
+        mode = 0o666 if writable else 0o644
         return {
-            'st_mode': stat.S_IFREG | 0o644,
+            'st_mode': stat.S_IFREG | mode,
             'st_ino': 0,
             'st_nlink': 1,
             'st_uid': 0,
@@ -403,80 +404,83 @@ class VirtualAIHandler:
             # /.ai/query/ directory
             return self._make_dir_stat(now)
 
-        if len(parts) == 2:
-            # /.ai/query/<session_id>
-            session_id = parts[1]
-            if session_id in self.query_buffers or session_id in self.response_buffers:
-                response = self.response_buffers.get(session_id, b"")
-                return self._make_file_stat(len(response), now)
-            # Allow creation of new sessions
-            return self._make_file_stat(0, now)
+        # Reject temp files and editor artifacts
+        if target_path.endswith('.tmp') or target_path.startswith('~'):
+            return None
 
-        return None
+        # Any path under /.ai/query/ is a valid query file
+        # The query text is derived from the filename
+        return self._make_file_stat(4096, now)  # Placeholder size
 
     def _readdir_query(self, target_path: str) -> List[str]:
-        """List query sessions."""
+        """List query help."""
         if not target_path:
-            # List all active query sessions
-            sessions = set(self.query_buffers.keys()) | set(self.response_buffers.keys())
-            return list(sessions)
+            return ["_help.txt"]
         return []
 
     def _read_query(self, target_path: str, parts: List[str]) -> bytes:
-        """Read query response."""
-        if len(parts) == 2:
-            session_id = parts[1]
-            return self.response_buffers.get(session_id, b"No response yet. Write a query first.\n")
-        return b""
+        """
+        Read query response.
+
+        Usage: cat /.ai/query/<query_text>
+        Replace spaces with underscores or + in the query.
+        Example: cat /.ai/query/what_is_machine_learning
+        """
+        if not target_path:
+            return b""
+
+        if target_path == "/_help.txt":
+            return self._get_query_help()
+
+        # Convert path to query text
+        query_text = target_path.lstrip("/").replace("_", " ").replace("+", " ").replace("-", " ")
+        return self._process_query(query_text).encode('utf-8')
+
+    def _get_query_help(self) -> bytes:
+        """Return help text for query."""
+        return b"""# Natural Language Query Interface
+
+## Usage
+
+Query your knowledge base using natural language:
+    cat /.ai/query/what_do_you_know_about_machine_learning
+    cat /.ai/query/summarize+my+recent+notes
+    cat /.ai/query/find_files_about_cooking
+
+## How It Works
+
+1. Your query is embedded using the same model as your files
+2. Relevant files are retrieved based on semantic similarity
+3. An LLM generates an answer using the retrieved context
+
+## Tips
+
+- Use underscores (_) or plus signs (+) for spaces
+- Be specific in your queries for better results
+- The system searches all indexed files
+"""
 
     def _write_query(self, target_path: str, parts: List[str], data: bytes, offset: int) -> int:
-        """Write query and generate response."""
-        if len(parts) == 2:
-            session_id = parts[1]
-
-            # Append or set query
-            if offset == 0:
-                self.query_buffers[session_id] = data
-            else:
-                existing = self.query_buffers.get(session_id, b"")
-                self.query_buffers[session_id] = existing + data
-
-            # Process query and generate response
-            query_text = self.query_buffers[session_id].decode('utf-8', errors='replace').strip()
-            response = self._process_query(query_text)
-            self.response_buffers[session_id] = response.encode('utf-8')
-
-            return len(data)
+        """Write query - no longer used (query via path instead)."""
         return 0
 
     def _process_query(self, query: str) -> str:
         """
         Process a natural language query against the knowledge graph.
 
-        This is a placeholder - full implementation requires the KG module.
+        Uses LLM with RAG to answer questions based on indexed files.
         """
         if not query:
             return "Please enter a query.\n"
 
-        # Placeholder response until KG is implemented
-        response_lines = [
-            f"Query: {query}",
-            "",
-            "Knowledge Graph Status: Not yet implemented",
-            "",
-            "This query interface will search:",
-            "  - File contents and metadata",
-            "  - Extracted entities and relationships",
-            "  - Semantic embeddings",
-            "",
-            "Example queries:",
-            "  'What do I know about machine learning?'",
-            "  'Show files related to project X'",
-            "  'Find documents from last week'",
-            "",
-        ]
+        try:
+            from .llm import get_query_engine
 
-        return "\n".join(response_lines)
+            engine = get_query_engine(self.knowledge_graph)
+            return engine.query(query)
+
+        except Exception as e:
+            return f"Query failed: {e}\n"
 
     # ==================== Summary operations ====================
 
@@ -515,34 +519,66 @@ class VirtualAIHandler:
 
     def _generate_summary(self, target_path: str) -> bytes:
         """
-        Generate AI summary for a file.
-
-        Placeholder until LLM integration is complete.
+        Generate AI summary for a file using LLM.
         """
-        lines = [
-            f"# Summary: {target_path}",
-            "",
-            "AI Summary generation not yet implemented.",
-            "",
-            "When implemented, this will:",
-            "  - Read the file content",
-            "  - Extract key points and themes",
-            "  - Generate a concise summary",
-            "  - Include semantic metadata",
-            "",
-        ]
+        lines = [f"# Summary: {target_path}", ""]
 
-        # Try to get basic file info
+        # Get file content
+        file_content = None
+        file_info = None
+
         if self.cognitivefs:
             inode = self.cognitivefs._resolve_path(target_path)
             if inode:
+                file_info = {
+                    'size': inode.size,
+                    'modified': time.ctime(inode.modified_at),
+                    'inode': inode.inode_num,
+                }
+                # Read file content
+                try:
+                    file_content = self.cognitivefs._read_file_data(inode).decode('utf-8', errors='replace')
+                except Exception:
+                    pass
+
+        # Try to get extracted text from knowledge graph
+        if not file_content and self.knowledge_graph:
+            file_record = self.knowledge_graph.get_file(target_path)
+            if file_record and file_record.extracted_text:
+                file_content = file_record.extracted_text
+
+        if not file_content:
+            lines.append("Cannot read file content for summarization.")
+            lines.append("")
+            if file_info:
                 lines.extend([
-                    f"File Information:",
-                    f"  Size: {inode.size} bytes",
-                    f"  Modified: {time.ctime(inode.modified_at)}",
-                    f"  Inode: {inode.inode_num}",
+                    "File Information:",
+                    f"  Size: {file_info['size']} bytes",
+                    f"  Modified: {file_info['modified']}",
                     "",
                 ])
+            return "\n".join(lines).encode('utf-8')
+
+        # Generate summary using LLM
+        try:
+            from .llm import get_summarizer
+
+            summarizer = get_summarizer()
+            summary_text = summarizer.summarize(file_content, target_path)
+
+            lines.append(summary_text)
+            lines.append("")
+
+            if file_info:
+                lines.extend([
+                    "---",
+                    f"Size: {file_info['size']} bytes | Modified: {file_info['modified']}",
+                    "",
+                ])
+
+        except Exception as e:
+            lines.append(f"Summary generation failed: {e}")
+            lines.append("")
 
         return "\n".join(lines).encode('utf-8')
 
@@ -726,7 +762,7 @@ class VirtualAIHandler:
             session_name = parts[1]
             # Get chat history content
             content = self._get_chat_content(session_name)
-            return self._make_file_stat(len(content), now)
+            return self._make_file_stat(len(content), now, writable=True)
 
         return None
 
