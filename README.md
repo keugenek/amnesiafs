@@ -53,11 +53,57 @@ python tools/mount.py test.img K: --debug
 
 ## Features
 
-- **Knowledge Graph**: Every file is analyzed and connected
-- **Semantic Search**: Find files by meaning, not just name
-- **Entity Extraction**: Automatic detection of people, places, concepts
-- **Version History**: Built-in file versioning
-- **Virtual AI Directory**: Access AI features through `.ai/` folder
+### ✅ Fully Working
+- **Knowledge Graph**: SQLite + FTS5 with entities, relationships, embeddings
+- **Entity Extraction**: 10 types (PERSON, ORG, LOCATION, DATE, etc.) via regex
+- **Semantic Search**: Embedding-based similarity with BAAI/bge models
+- **Text Extraction**: 30+ file types including JSON, CSV, YAML parsing
+- **Background Processing**: Async file analysis on write
+- **Virtual AI Directory**: `.ai/` folder with query, status, search, entities
+
+### ⚠️ Partial/Basic
+- **Topic Clustering**: Infrastructure exists, limited auto-population
+- **Related Files**: Shows similar files but basic implementation
+- **LLM Queries**: Works with Ollama but requires external setup
+
+### ❌ Not Yet Implemented
+- **LLM Summaries**: Disabled for stability (shows file preview only)
+- **Multi-Modal**: No image/video/audio processing yet
+- **Version History**: Schema exists but not active
+- **Graph Visualization**: Returns help text only
+
+## Virtual AI Paths (`.ai/`)
+
+When mounted, browse `K:\.ai\` for AI-powered virtual directories:
+
+| Path | Status | Description |
+|------|--------|-------------|
+| `.ai/status/` | ✅ Working | System status JSON (files, entities, queue) |
+| `.ai/query/<question>` | ✅ Working | Async LLM query (requires Ollama) |
+| `.ai/search/<text>` | ✅ Working | Full-text search with snippets |
+| `.ai/entities/` | ✅ Working | List all extracted entities |
+| `.ai/related/<file>` | ⚠️ Basic | Find similar files by embedding |
+| `.ai/similar/<file>` | ⚠️ Basic | Embedding similarity search |
+| `.ai/summary/<file>` | ❌ Disabled | Shows preview only (LLM disabled) |
+| `.ai/by-topic/` | ⚠️ Basic | Topic clusters (limited) |
+| `.ai/by-date/` | ❌ Stub | Not fully implemented |
+| `.ai/chat/` | ⚠️ Basic | Session handling infrastructure |
+| `.ai/graph/` | ❌ Stub | Returns help text only |
+
+**Example usage:**
+```powershell
+# Check system status
+type K:\.ai\status\index.txt
+
+# Search for files
+dir K:\.ai\search\machine learning
+
+# List entities
+dir K:\.ai\entities\
+
+# Find related files (requires embeddings)
+dir K:\.ai\related\myfile.txt
+```
 
 ## Project Structure
 
@@ -68,10 +114,12 @@ amnesiafs/
 │   ├── diskformat.py        # On-disk format structures
 │   ├── fuse_ops.py          # FUSE operations implementation
 │   ├── knowledge_graph.py   # Knowledge graph + SQLite storage
-│   ├── embedder.py          # Embedding generation
+│   ├── embedder.py          # Embedding generation (6 models, CUDA)
 │   ├── processor.py         # Background file processing
 │   ├── virtual_ai.py        # .ai/ virtual directory
-│   └── extractor.py         # Text/entity extraction
+│   ├── extractor.py         # Text/entity extraction (30+ types)
+│   ├── llm.py               # Ollama LLM integration
+│   └── relationship_detector.py  # Co-occurrence & similarity
 ├── tools/                   # Utility scripts
 │   ├── format_device.py     # Format disk/image
 │   ├── mount.py             # Mount filesystem
