@@ -1,0 +1,55 @@
+version: "3.9"
+
+# Docker Compose configuration for RAGAS evaluation
+# Run with: docker compose -f docker-compose.eval.yml up
+
+services:
+  # Ollama service for local LLM inference
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama-eval
+    volumes:
+      - ollama-models:/root/.ollama
+    ports:
+      - "11434:11434"
+    restart: unless-stopped
+    # Uncomment for GPU support:
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+
+  # CognitiveFS evaluation container
+  cognitivefs-eval:
+    build:
+      context: .
+      dockerfile: Dockerfile.eval
+    image: cognitivefs:eval
+    container_name: cognitivefs-eval
+    privileged: true
+    devices:
+      - /dev/fuse:/dev/fuse
+    cap_add:
+      - SYS_ADMIN
+    security_opt:
+      - apparmor:unconfined
+    volumes:
+      - .:/workspace
+      - ./eval-results:/workspace/eval-results
+      - ./test-data:/workspace/test-data
+    working_dir: /workspace
+    environment:
+      - PYTHONPATH=/workspace/src
+      - OLLAMA_BASE_URL=http://ollama:11434
+      - RAGAS_MODEL=llama3:8b
+    depends_on:
+      - ollama
+    stdin_open: true
+    tty: true
+
+volumes:
+  ollama-models:
+    name: cognitivefs-ollama-models

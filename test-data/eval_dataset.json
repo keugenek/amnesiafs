@@ -1,0 +1,62 @@
+[
+  {
+    "user_input": "What is CognitiveFS and what are its main features?",
+    "reference": "CognitiveFS is an AI-native FUSE filesystem that combines traditional file storage with knowledge graph capabilities. Key features include automatic knowledge extraction from files, semantic search via embeddings, entity recognition (people, organizations, concepts), and a virtual .ai directory for AI-powered queries.",
+    "expected_contexts": ["README", "IMPLEMENTATION"],
+    "category": "overview"
+  },
+  {
+    "user_input": "How does the knowledge graph store and organize information?",
+    "reference": "The knowledge graph uses SQLite for storage with tables for files, entities, relationships, and embeddings. Files are indexed with extracted text, summaries, and entity references. Entities are linked through relationships with types like mentions, contains, and related_to.",
+    "expected_contexts": ["knowledge_graph"],
+    "category": "architecture"
+  },
+  {
+    "user_input": "What LLM models does CognitiveFS support for queries?",
+    "reference": "CognitiveFS integrates with Ollama for local LLM inference. The default model is qwen2.5:3b. The OllamaClient connects to localhost:11434 and supports generate() and chat() methods for queries and conversations.",
+    "expected_contexts": ["llm"],
+    "category": "configuration"
+  },
+  {
+    "user_input": "How do I mount a CognitiveFS filesystem?",
+    "reference": "Use the CLI command: python -m cognitivefs mount <device> <mountpoint>. The device can be an image file or block device. Add --debug for verbose logging. On Windows, use a drive letter like K: as the mountpoint.",
+    "expected_contexts": ["__main__", "mount"],
+    "category": "usage"
+  },
+  {
+    "user_input": "What virtual files are available in the .ai directory?",
+    "reference": "The .ai directory provides virtual endpoints including: /query/<question> for natural language queries, /search/<term> for semantic search, /summary/<file> for AI summaries, /related/<file> for finding related files, /by-topic/ for topic-based organization, and /entities/ for browsing extracted entities.",
+    "expected_contexts": ["virtual_ai"],
+    "category": "features"
+  },
+  {
+    "user_input": "How does CognitiveFS extract entities from files?",
+    "reference": "The extractor module uses regex patterns to identify entity types including: person names, organizations, email addresses, URLs, dates, phone numbers, and file paths. Entities are stored in the knowledge graph with source references and confidence scores.",
+    "expected_contexts": ["extractor"],
+    "category": "architecture"
+  },
+  {
+    "user_input": "What is the disk format used by CognitiveFS?",
+    "reference": "CognitiveFS uses a custom disk format with a superblock (magic COGFS001), allocation bitmap, inode table, and dedicated regions for the knowledge graph, embedding store, version store, and data blocks. Block size is 4KB with 512-byte sector alignment.",
+    "expected_contexts": ["diskformat", "blockdev"],
+    "category": "architecture"
+  },
+  {
+    "user_input": "How do embeddings work in the semantic search?",
+    "reference": "Embeddings are generated using sentence-transformers with the all-MiniLM-L6-v2 model (384 dimensions). File content is embedded and stored in the knowledge graph. Search queries are embedded and compared using cosine similarity to find relevant files.",
+    "expected_contexts": ["embedder"],
+    "category": "features"
+  },
+  {
+    "user_input": "What background processing does CognitiveFS perform?",
+    "reference": "The SyncProcessor handles background knowledge extraction. When files are created or modified, they are queued for processing. The processor extracts text content, generates embeddings, identifies entities, and updates the knowledge graph.",
+    "expected_contexts": ["processor"],
+    "category": "architecture"
+  },
+  {
+    "user_input": "How does relationship detection work between entities?",
+    "reference": "The relationship detector identifies connections between entities through: co-occurrence in files, semantic similarity via embeddings, explicit references in content, and shared context. Relationships are typed (mentions, related_to, contains) with confidence scores.",
+    "expected_contexts": ["relationship_detector"],
+    "category": "features"
+  }
+]

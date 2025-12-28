@@ -1,0 +1,31 @@
+FROM python:3.11-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PYTHONPATH=/workspace/src
+
+# Install runtime deps + eval tools
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        fuse3 \
+        curl \
+        jq \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /workspace
+
+# Install base dependencies first
+COPY requirements.txt /workspace/
+RUN pip install --no-cache-dir -r /workspace/requirements.txt
+
+# Install RAGAS evaluation dependencies
+COPY requirements-eval.txt /workspace/
+RUN pip install --no-cache-dir -r /workspace/requirements-eval.txt
+
+# Copy source code
+COPY src /workspace/src
+COPY tools /workspace/tools
+COPY tests /workspace/tests
+
+ENTRYPOINT ["bash"]

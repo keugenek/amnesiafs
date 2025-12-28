@@ -15,3 +15,10 @@ test.img
 *.kg.db-wal
 brain.img
 *.log
+
+# Evaluation artifacts
+eval-results/
+test-data/*.img
+test-data/*.db
+test-data/*.db-shm
+test-data/*.db-wal

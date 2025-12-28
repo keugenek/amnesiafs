@@ -1,0 +1,16 @@
+# RAGAS evaluation dependencies
+# Used by Dockerfile.eval for RAG evaluation with local LLM
+
+# RAGAS framework (academically proven RAG evaluation)
+ragas>=0.2.0
+
+# LangChain Ollama integration for local LLM
+langchain-ollama>=0.2.0
+langchain-core>=0.3.0
+
+# Data handling
+pandas>=2.0.0
+datasets>=2.0.0
+
+# Embeddings (for context retrieval evaluation)
+sentence-transformers>=2.2.0
