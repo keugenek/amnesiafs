@@ -39,6 +39,10 @@ class EntityType(Enum):
     PROJECT = "project"
     TOPIC = "topic"
     TAG = "tag"
+    # Structured data types
+    FIELD = "field"           # JSON/YAML keys
+    COLUMN = "column"         # CSV headers
+    SCHEMA_TYPE = "schema_type"  # Value type metadata
 
 
 class RelationType(Enum):

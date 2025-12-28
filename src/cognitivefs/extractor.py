@@ -8,10 +8,20 @@ using regex-based pattern matching. Supports text, code, and config files.
 import re
 import hashlib
 import mimetypes
-from typing import List, Dict, Any, Optional, Set
+import json
+import csv
+import io
+from typing import List, Dict, Any, Optional, Set, Tuple
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
+
+# Optional YAML support
+try:
+    import yaml
+    YAML_AVAILABLE = True
+except ImportError:
+    YAML_AVAILABLE = False
 
 
 class ExtractedEntityType(Enum):
@@ -26,6 +36,10 @@ class ExtractedEntityType(Enum):
     CODE_FUNCTION = "code_function"
     FILE_PATH = "file_path"
     KEYWORD = "keyword"
+    # Structured data types
+    FIELD = "field"           # JSON/YAML keys
+    COLUMN = "column"         # CSV headers
+    SCHEMA_TYPE = "schema_type"  # Value type info (string, number, etc.)
 
 
 @dataclass
@@ -290,6 +304,161 @@ class ContentExtractor:
 
         return html.strip()
 
+    # ==================== Structured File Parsing ====================
+
+    def extract_json_entities(self, data: bytes) -> List[ExtractedEntity]:
+        """
+        Extract JSON keys as FIELD entities with JSONPath context.
+
+        Args:
+            data: Raw JSON bytes
+
+        Returns:
+            List of ExtractedEntity with type FIELD, value=key, context=full.path
+        """
+        entities = []
+
+        def traverse(obj: Any, path: str = "") -> None:
+            if isinstance(obj, dict):
+                for key, value in obj.items():
+                    full_path = f"{path}.{key}" if path else key
+                    # Extract key as FIELD entity
+                    entities.append(ExtractedEntity(
+                        entity_type=ExtractedEntityType.FIELD,
+                        value=key,
+                        context=full_path,
+                        confidence=1.0
+                    ))
+                    # Extract value type as SCHEMA_TYPE
+                    vtype = type(value).__name__
+                    type_map = {'str': 'string', 'int': 'number', 'float': 'number',
+                                'bool': 'boolean', 'list': 'array', 'dict': 'object',
+                                'NoneType': 'null'}
+                    if vtype in type_map:
+                        entities.append(ExtractedEntity(
+                            entity_type=ExtractedEntityType.SCHEMA_TYPE,
+                            value=type_map[vtype],
+                            context=full_path,
+                            confidence=1.0
+                        ))
+                    traverse(value, full_path)
+            elif isinstance(obj, list):
+                for i, item in enumerate(obj):
+                    traverse(item, f"{path}[{i}]")
+
+        try:
+            parsed = json.loads(data.decode('utf-8'))
+            traverse(parsed)
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            pass
+
+        return entities
+
+    def extract_yaml_entities(self, data: bytes) -> List[ExtractedEntity]:
+        """
+        Extract YAML keys as FIELD entities with path context.
+
+        Args:
+            data: Raw YAML bytes
+
+        Returns:
+            List of ExtractedEntity with type FIELD
+        """
+        if not YAML_AVAILABLE:
+            return []
+
+        entities = []
+
+        def traverse(obj: Any, path: str = "") -> None:
+            if isinstance(obj, dict):
+                for key, value in obj.items():
+                    full_path = f"{path}.{key}" if path else str(key)
+                    entities.append(ExtractedEntity(
+                        entity_type=ExtractedEntityType.FIELD,
+                        value=str(key),
+                        context=full_path,
+                        confidence=1.0
+                    ))
+                    # Extract value type
+                    vtype = type(value).__name__
+                    type_map = {'str': 'string', 'int': 'number', 'float': 'number',
+                                'bool': 'boolean', 'list': 'array', 'dict': 'object',
+                                'NoneType': 'null'}
+                    if vtype in type_map:
+                        entities.append(ExtractedEntity(
+                            entity_type=ExtractedEntityType.SCHEMA_TYPE,
+                            value=type_map[vtype],
+                            context=full_path,
+                            confidence=1.0
+                        ))
+                    traverse(value, full_path)
+            elif isinstance(obj, list):
+                for i, item in enumerate(obj):
+                    traverse(item, f"{path}[{i}]")
+
+        try:
+            parsed = yaml.safe_load(data.decode('utf-8'))
+            if parsed:  # YAML can return None for empty docs
+                traverse(parsed)
+        except (yaml.YAMLError, UnicodeDecodeError):
+            pass
+
+        return entities
+
+    def extract_csv_entities(self, data: bytes) -> List[ExtractedEntity]:
+        """
+        Extract CSV headers as COLUMN entities.
+
+        Args:
+            data: Raw CSV bytes
+
+        Returns:
+            List of ExtractedEntity with type COLUMN for each header
+        """
+        entities = []
+
+        try:
+            text = data.decode('utf-8')
+            reader = csv.reader(io.StringIO(text))
+            headers = next(reader, None)
+
+            if headers:
+                for i, header in enumerate(headers):
+                    header = header.strip()
+                    if header:  # Skip empty headers
+                        entities.append(ExtractedEntity(
+                            entity_type=ExtractedEntityType.COLUMN,
+                            value=header,
+                            context=f"column[{i}]",
+                            confidence=1.0
+                        ))
+        except (UnicodeDecodeError, csv.Error):
+            pass
+
+        return entities
+
+    def format_json(self, data: bytes) -> str:
+        """Format JSON data for better readability and indexing."""
+        try:
+            parsed = json.loads(data.decode('utf-8'))
+            return json.dumps(parsed, indent=2, ensure_ascii=False)
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            return data.decode('utf-8', errors='replace')
+
+    def format_yaml(self, data: bytes) -> str:
+        """Format YAML data (pass through, already readable)."""
+        try:
+            return data.decode('utf-8')
+        except UnicodeDecodeError:
+            return data.decode('latin-1', errors='replace')
+
+    def format_csv(self, data: bytes) -> str:
+        """Format CSV data (pass through)."""
+        try:
+            return data.decode('utf-8')
+        except UnicodeDecodeError:
+            return data.decode('latin-1', errors='replace')
+
 
 class EntityExtractor:
     """
@@ -531,5 +700,19 @@ def extract_all(path: str, data: bytes) -> ExtractionResult:
     if result.text:
         result.entities = entity_extractor.extract_entities(result.text)
         result.keywords = entity_extractor.extract_keywords(result.text)
+
+    # Add structured file entities (JSON, YAML, CSV)
+    mime = result.mime_type
+    if mime == 'application/json':
+        structured_entities = content_extractor.extract_json_entities(data)
+        result.entities.extend(structured_entities)
+        # Reformat for better readability
+        result.text = content_extractor.format_json(data)
+    elif mime in ('text/yaml', 'text/x-yaml', 'application/x-yaml'):
+        structured_entities = content_extractor.extract_yaml_entities(data)
+        result.entities.extend(structured_entities)
+    elif mime == 'text/csv':
+        structured_entities = content_extractor.extract_csv_entities(data)
+        result.entities.extend(structured_entities)
 
     return result

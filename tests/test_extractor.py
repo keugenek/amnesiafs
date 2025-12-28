@@ -178,5 +178,104 @@ class TestExtractAll(unittest.TestCase):
         self.assertTrue(len(entity_values) > 0)
 
 
+class TestStructuredExtraction(unittest.TestCase):
+    """Test structured file extraction (JSON, YAML, CSV)."""
+
+    def setUp(self):
+        self.extractor = ContentExtractor()
+
+    def test_json_key_extraction(self):
+        """Test extracting keys from JSON as FIELD entities."""
+        json_data = b'{"name": "Alice", "age": 30}'
+        entities = self.extractor.extract_json_entities(json_data)
+
+        field_values = [e.value for e in entities if e.entity_type == ExtractedEntityType.FIELD]
+        self.assertIn("name", field_values)
+        self.assertIn("age", field_values)
+
+    def test_json_nested_paths(self):
+        """Test JSONPath context for nested keys."""
+        json_data = b'{"user": {"address": {"city": "NYC"}}}'
+        entities = self.extractor.extract_json_entities(json_data)
+
+        # Find the city field
+        city_entities = [e for e in entities
+                        if e.entity_type == ExtractedEntityType.FIELD and e.value == "city"]
+        self.assertEqual(len(city_entities), 1)
+        self.assertEqual(city_entities[0].context, "user.address.city")
+
+    def test_json_value_types(self):
+        """Test SCHEMA_TYPE extraction for different value types."""
+        json_data = b'{"name": "test", "count": 42, "active": true, "items": []}'
+        entities = self.extractor.extract_json_entities(json_data)
+
+        schema_types = {e.context: e.value for e in entities
+                       if e.entity_type == ExtractedEntityType.SCHEMA_TYPE}
+
+        self.assertEqual(schema_types.get("name"), "string")
+        self.assertEqual(schema_types.get("count"), "number")
+        self.assertEqual(schema_types.get("active"), "boolean")
+        self.assertEqual(schema_types.get("items"), "array")
+
+    def test_json_array_traversal(self):
+        """Test traversing arrays in JSON."""
+        json_data = b'{"users": [{"name": "Alice"}, {"name": "Bob"}]}'
+        entities = self.extractor.extract_json_entities(json_data)
+
+        # Should find name fields in both array elements
+        name_contexts = [e.context for e in entities
+                        if e.entity_type == ExtractedEntityType.FIELD and e.value == "name"]
+        self.assertIn("users[0].name", name_contexts)
+        self.assertIn("users[1].name", name_contexts)
+
+    def test_invalid_json_fallback(self):
+        """Test graceful handling of invalid JSON."""
+        invalid_json = b'{invalid json here'
+        entities = self.extractor.extract_json_entities(invalid_json)
+        self.assertEqual(entities, [])
+
+    def test_csv_header_extraction(self):
+        """Test extracting CSV headers as COLUMN entities."""
+        csv_data = b"name,age,city\nAlice,30,NYC\nBob,25,LA"
+        entities = self.extractor.extract_csv_entities(csv_data)
+
+        columns = [e.value for e in entities if e.entity_type == ExtractedEntityType.COLUMN]
+        self.assertIn("name", columns)
+        self.assertIn("age", columns)
+        self.assertIn("city", columns)
+
+    def test_csv_column_context(self):
+        """Test CSV column index in context."""
+        csv_data = b"id,name,value\n1,test,100"
+        entities = self.extractor.extract_csv_entities(csv_data)
+
+        id_entity = [e for e in entities if e.value == "id"][0]
+        self.assertEqual(id_entity.context, "column[0]")
+
+    def test_extract_all_json(self):
+        """Test extract_all includes JSON field entities."""
+        json_data = b'{"project": "CognitiveFS", "version": "1.0"}'
+        result = extract_all("/config.json", json_data)
+
+        # Should have FIELD entities
+        field_values = [e.value for e in result.entities
+                       if e.entity_type == ExtractedEntityType.FIELD]
+        self.assertIn("project", field_values)
+        self.assertIn("version", field_values)
+
+        # Text should be formatted
+        self.assertIn('"project"', result.text)
+
+    def test_extract_all_csv(self):
+        """Test extract_all includes CSV column entities."""
+        csv_data = b"user_id,username,email\n1,alice,alice@test.com"
+        result = extract_all("/users.csv", csv_data)
+
+        column_values = [e.value for e in result.entities
+                        if e.entity_type == ExtractedEntityType.COLUMN]
+        self.assertIn("user_id", column_values)
+        self.assertIn("username", column_values)
+
+
 if __name__ == '__main__':
     unittest.main()

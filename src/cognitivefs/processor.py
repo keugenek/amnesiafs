@@ -33,6 +33,10 @@ ENTITY_TYPE_MAP = {
     ExtractedEntityType.CODE_FUNCTION: EntityType.CONCEPT,
     ExtractedEntityType.FILE_PATH: EntityType.FILE,
     ExtractedEntityType.KEYWORD: EntityType.CONCEPT,
+    # Structured data types
+    ExtractedEntityType.FIELD: EntityType.FIELD,
+    ExtractedEntityType.COLUMN: EntityType.COLUMN,
+    ExtractedEntityType.SCHEMA_TYPE: EntityType.SCHEMA_TYPE,
 }
 
 
