@@ -1,0 +1,23 @@
+version: "3.9"
+
+services:
+  cognitivefs:
+    build:
+      context: .
+    image: cognitivefs:dev
+    container_name: cognitivefs
+    privileged: true
+    devices:
+      - /dev/fuse:/dev/fuse
+    cap_add:
+      - SYS_ADMIN
+    security_opt:
+      - apparmor:unconfined
+    volumes:
+      - .:/workspace
+      - /dev:/dev
+    working_dir: /workspace
+    environment:
+      - PYTHONPATH=/workspace/src
+    entrypoint: ["python", "-m", "cognitivefs"]
+    command: ["--help"]
