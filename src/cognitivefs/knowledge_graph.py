@@ -740,6 +740,45 @@ class KnowledgeGraph:
             )
         return None
 
+    def get_similar_files(self, file_id: int, limit: int = 10) -> List[Tuple[FileRecord, float]]:
+        """
+        Find files similar to the given file based on embedding similarity.
+
+        Args:
+            file_id: ID of the file to find similar files for
+            limit: Maximum number of similar files to return
+
+        Returns:
+            List of (FileRecord, similarity_score) tuples sorted by similarity
+        """
+        from .embedder import cosine_similarity
+
+        # Get the source file's embedding
+        source_embedding = self.get_embedding(file_id=file_id)
+        if not source_embedding or not source_embedding.vector:
+            return []
+
+        cursor = self.conn.cursor()
+
+        # Get all other files with embeddings
+        cursor.execute("""
+            SELECT f.*, e.vector
+            FROM files f
+            JOIN embeddings e ON f.embedding_id = e.id
+            WHERE f.id != ? AND e.vector IS NOT NULL
+        """, (file_id,))
+
+        results = []
+        for row in cursor.fetchall():
+            similarity = cosine_similarity(source_embedding.vector, row['vector'])
+            if similarity > 0.1:  # Only include files with meaningful similarity
+                file_record = self._row_to_file(row)
+                results.append((file_record, similarity))
+
+        # Sort by similarity descending
+        results.sort(key=lambda x: x[1], reverse=True)
+        return results[:limit]
+
     # ==================== Topic Operations ====================
 
     def add_topic(self, name: str, description: str = "",

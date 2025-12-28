@@ -66,6 +66,7 @@ class VirtualAIHandler:
         "summary": VirtualNodeType.SUMMARY,
         "related": VirtualNodeType.RELATED,
         "similar": VirtualNodeType.DIRECTORY,  # Embedding-based similarity search
+        "entities": VirtualNodeType.DIRECTORY,  # Show entities extracted from a file
         "by-topic": VirtualNodeType.DIRECTORY,
         "by-date": VirtualNodeType.DIRECTORY,
         "chat": VirtualNodeType.CHAT,
@@ -168,6 +169,8 @@ class VirtualAIHandler:
             return self._getattr_search(target_path, parts)
         elif subdir == "similar":
             return self._getattr_similar(target_path, parts)
+        elif subdir == "entities":
+            return self._getattr_entities(target_path, parts)
         elif subdir == "by-topic":
             return self._getattr_by_topic(target_path, parts)
         elif subdir == "by-date":
@@ -205,6 +208,8 @@ class VirtualAIHandler:
             return self._readdir_search(target_path)
         elif subdir == "similar":
             return self._readdir_similar(target_path)
+        elif subdir == "entities":
+            return self._readdir_entities(target_path)
         elif subdir in ("summary", "related"):
             # These mirror the real filesystem structure
             return self._readdir_mirror(target_path)
@@ -238,6 +243,8 @@ class VirtualAIHandler:
             content = self._read_search(target_path, parts)
         elif subdir == "similar":
             content = self._read_similar(target_path, parts)
+        elif subdir == "entities":
+            content = self._read_entities(target_path, parts)
         elif subdir == "by-topic":
             content = self._read_by_topic(target_path, parts)
 
@@ -1362,6 +1369,14 @@ List all queries:
                 return self._get_graph_help()
             return self._get_graph_content(query_type)
 
+        # /.ai/graph/entities/page/<N> - paginated entity list
+        if len(parts) >= 4 and parts[1] == "entities" and parts[2] == "page":
+            try:
+                page = int(parts[3])
+                return self._get_graph_content("entities", page=page)
+            except ValueError:
+                return b"Invalid page number. Use: cat /.ai/graph/entities/page/1\n"
+
         # /.ai/graph/connections/<entity1>/<entity2>
         if len(parts) >= 3 and parts[1] == "connections":
             if parts[2] == "_help.txt":
@@ -1390,7 +1405,7 @@ List all queries:
 
         return b""
 
-    def _get_graph_content(self, query_type: str) -> bytes:
+    def _get_graph_content(self, query_type: str, page: int = 1) -> bytes:
         """Get knowledge graph data."""
         if not self.knowledge_graph:
             if query_type == "stats":
@@ -1403,22 +1418,54 @@ List all queries:
             return json.dumps(stats, indent=2).encode('utf-8') + b"\n"
 
         elif query_type == "entities":
+            ITEMS_PER_PAGE = 50
             lines = ["# Entities in Knowledge Graph", ""]
 
-            # Get entities by type
+            # Get all entities grouped by type
             from .knowledge_graph import EntityType
+            all_entities = []
             for et in EntityType:
-                entities = self.knowledge_graph.get_entities_by_type(et, limit=50)
-                if entities:
-                    lines.append(f"## {et.value.title()} ({len(entities)})")
-                    for e in entities[:20]:
-                        lines.append(f"  - {e.name} (refs: {e.source_count})")
-                    if len(entities) > 20:
-                        lines.append(f"  ... and {len(entities) - 20} more")
-                    lines.append("")
+                entities = self.knowledge_graph.get_entities_by_type(et, limit=500)
+                for e in entities:
+                    all_entities.append((et, e))
 
-            if len(lines) == 2:
+            total_entities = len(all_entities)
+            total_pages = max(1, (total_entities + ITEMS_PER_PAGE - 1) // ITEMS_PER_PAGE)
+
+            # Validate page number
+            if page < 1:
+                page = 1
+            if page > total_pages:
+                page = total_pages
+
+            # Calculate slice
+            start_idx = (page - 1) * ITEMS_PER_PAGE
+            end_idx = start_idx + ITEMS_PER_PAGE
+            page_entities = all_entities[start_idx:end_idx]
+
+            if not page_entities:
                 lines.append("No entities indexed yet.")
+            else:
+                lines.append(f"Page {page} of {total_pages} ({total_entities} total entities)")
+                lines.append("")
+
+                # Group page entities by type for display
+                current_type = None
+                for et, e in page_entities:
+                    if et != current_type:
+                        if current_type is not None:
+                            lines.append("")
+                        lines.append(f"## {et.value.title()}")
+                        current_type = et
+                    lines.append(f"  - {e.name} (refs: {e.source_count})")
+
+                # Navigation footer
+                lines.append("")
+                lines.append("---")
+                if page > 1:
+                    lines.append(f"Previous: cat /.ai/graph/entities/page/{page - 1}")
+                if page < total_pages:
+                    lines.append(f"Next: cat /.ai/graph/entities/page/{page + 1}")
 
             return "\n".join(lines).encode('utf-8')
 
@@ -1638,10 +1685,15 @@ Get all connections for one entity:
             from .relationship_detector import MultiHopQueryEngine
 
             engine = MultiHopQueryEngine(self.knowledge_graph)
+
+            # Normalize entity name: underscores to spaces, lowercase for matching
+            normalized_name = entity_name.lower().strip()
+
             context = engine.get_entity_context(entity_name, depth=2)
 
             if 'error' in context:
-                return f"{context['error']}\n".encode('utf-8')
+                # Entity not found - try fuzzy search and suggest alternatives
+                return self._suggest_entity_alternatives(entity_name)
 
             entity = context['entity']
             related = context.get('related_entities', [])
@@ -1693,6 +1745,46 @@ Get all connections for one entity:
 
         except Exception as e:
             return f"Error getting context: {e}\n".encode('utf-8')
+
+    def _suggest_entity_alternatives(self, entity_name: str) -> bytes:
+        """
+        Suggest alternative entities when the requested one is not found.
+
+        Uses FTS5 search to find similar entities and provides helpful suggestions.
+        """
+        lines = [
+            f"Entity '{entity_name}' not found.",
+            ""
+        ]
+
+        try:
+            # Try FTS5 search for similar entities
+            suggestions = self.knowledge_graph.search_entities(entity_name, limit=5)
+
+            if suggestions:
+                lines.append("Did you mean:")
+                for entity in suggestions:
+                    # Format: name (type, N references)
+                    lines.append(f"  - {entity.name} ({entity.entity_type.value}, {entity.source_count} refs)")
+                lines.append("")
+                lines.append("Try:")
+                # Suggest the first match with underscores for spaces
+                first_suggestion = suggestions[0].name.replace(" ", "_")
+                lines.append(f"  cat /.ai/graph/context/{first_suggestion}")
+            else:
+                # No FTS matches - try listing some entities
+                lines.append("No similar entities found.")
+                lines.append("")
+                lines.append("To see available entities:")
+                lines.append("  cat /.ai/graph/entities")
+                lines.append("")
+                lines.append("Or search for entities:")
+                lines.append("  cat /.ai/search/<keyword>")
+
+        except Exception as e:
+            lines.append(f"Error searching for alternatives: {e}")
+
+        return "\n".join(lines).encode('utf-8')
 
     def _execute_graph_query(self, question: str) -> bytes:
         """Execute a natural language query against the knowledge graph."""
@@ -2113,5 +2205,121 @@ Find files similar to an existing file:
                 lines.append(f"[{sim:.3f}] {path}")
                 if summary:
                     lines.append(f"        {summary[:80]}")
+
+        return "\n".join(lines).encode('utf-8')
+
+    # ==================== Entities (file entity view) operations ====================
+
+    def _getattr_entities(self, target_path: str, parts: List[str]) -> Optional[Dict]:
+        """Get attributes for entities paths (show entities extracted from a file)."""
+        now = int(time.time())
+
+        # /.ai/entities/ - directory listing
+        if not target_path:
+            return self._make_dir_stat(now)
+
+        # Reject temp files and other editor artifacts
+        if target_path.endswith('.tmp') or target_path.startswith('~'):
+            return None
+
+        # /.ai/entities/<filepath> - return a placeholder size
+        return self._make_file_stat(4096, now)
+
+    def _readdir_entities(self, target_path: str) -> List[str]:
+        """Read directory for entities view."""
+        if not target_path:
+            return ["_help.txt"]
+        return []
+
+    def _read_entities(self, target_path: str, parts: List[str]) -> bytes:
+        """
+        Show entities extracted from a specific file.
+
+        Usage:
+            cat /.ai/entities/_help.txt              - Show help
+            cat /.ai/entities/path/to/file.md        - Show entities from file
+        """
+        if not target_path:
+            return b""
+
+        if target_path == "_help.txt":
+            return self._get_entities_help()
+
+        return self._get_file_entities(target_path)
+
+    def _get_entities_help(self) -> bytes:
+        """Return help text for file entities view."""
+        help_text = """# File Entity View
+
+## Usage
+
+Show entities extracted from a specific file:
+    cat /.ai/entities/path/to/file.md
+    cat /.ai/entities/profiles/geekyinventor/README.md
+
+## What it shows
+
+- Person entities (names mentioned in the file)
+- Organization entities (companies, groups)
+- Concept entities (technical terms, topics)
+- Other entity types (dates, locations, etc.)
+
+## How it works
+
+1. When files are indexed, entities are extracted using NLP
+2. Each entity has a confidence score
+3. Context shows where the entity was found in the file
+
+## Related commands
+
+- cat /.ai/graph/entities       - List all entities
+- cat /.ai/graph/context/<name> - Full context for an entity
+- cat /.ai/search/<query>       - Search for entities/files
+"""
+        return help_text.encode('utf-8')
+
+    def _get_file_entities(self, file_path: str) -> bytes:
+        """Get entities extracted from a specific file."""
+        if not self.knowledge_graph:
+            return b"Knowledge graph not initialized.\n"
+
+        # Ensure file_path starts with /
+        if not file_path.startswith("/"):
+            file_path = "/" + file_path
+
+        # Get file record
+        file_record = self.knowledge_graph.get_file(file_path)
+        if not file_record:
+            return f"File not indexed: {file_path}\n\nTo index files, they must be written through CognitiveFS.\n".encode('utf-8')
+
+        # Get entities for this file
+        file_entities = self.knowledge_graph.get_file_entities(file_record.id)
+
+        if not file_entities:
+            return f"# Entities in {file_path}\n\nNo entities extracted from this file.\n".encode('utf-8')
+
+        lines = [
+            f"# Entities in {file_path}",
+            f"Found {len(file_entities)} entities",
+            ""
+        ]
+
+        # Group entities by type
+        by_type = {}
+        for entity, rel_type, confidence in file_entities:
+            etype = entity.entity_type.value
+            if etype not in by_type:
+                by_type[etype] = []
+            by_type[etype].append((entity, rel_type, confidence))
+
+        # Display by type
+        for etype, entities in sorted(by_type.items()):
+            lines.append(f"## {etype.title()} ({len(entities)})")
+            for entity, rel_type, confidence in sorted(entities, key=lambda x: x[2], reverse=True):
+                lines.append(f"  - {entity.name} (confidence: {confidence:.2f})")
+                if entity.description:
+                    desc = entity.description[:80] + "..." if len(entity.description) > 80 else entity.description
+                    lines.append(f"    {desc}")
+            lines.append("")
 
         return "\n".join(lines).encode('utf-8')

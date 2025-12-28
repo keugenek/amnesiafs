@@ -206,30 +206,42 @@ Be concise and direct. Reference specific files when relevant."""
         # 1. Find relevant files using semantic search
         context_files = self._find_relevant_files(question, max_context_files)
 
-        if not context_files:
-            # No indexed files, still try to answer
+        # 2. Find relevant entities from the knowledge graph
+        entity_context = self._find_relevant_entities(question, context_files)
+
+        if not context_files and not entity_context:
+            # No indexed content, still try to answer
             prompt = f"Question: {question}\n\nNo files have been indexed yet. Please let the user know they should add some files first."
             response = self.llm.generate(prompt, system=self.SYSTEM_PROMPT)
             if response:
                 return response.content
             return "No files indexed and LLM unavailable.\n"
 
-        # 2. Build context from files
-        context = self._build_context(context_files)
+        # 3. Build context from files and entities
+        file_context = self._build_context(context_files) if context_files else ""
 
-        # 3. Generate answer
-        prompt = f"""Context from your files:
-{context}
+        # 4. Combine contexts
+        full_context = ""
+        if file_context:
+            full_context += f"[Files]\n{file_context}\n"
+        if entity_context:
+            full_context += f"\n[Knowledge Graph]\n{entity_context}\n"
+
+        # 5. Generate answer
+        prompt = f"""Context from your knowledge base:
+{full_context}
 
 Question: {question}
 
-Answer based on the context above:"""
+Answer based on the context above. Reference specific files and entities when relevant:"""
 
         response = self.llm.generate(prompt, system=self.SYSTEM_PROMPT, max_tokens=256)
 
         if response:
             # Add source references
-            sources = "\n\nSources:\n" + "\n".join(f"  - {f['path']}" for f in context_files)
+            sources = "\n\nSources:\n"
+            if context_files:
+                sources += "\n".join(f"  - {f['path']}" for f in context_files)
             return response.content + sources + "\n"
 
         return "Failed to generate response.\n"
@@ -304,7 +316,7 @@ Answer based on the context above:"""
             'similarity': 0.5  # Default similarity for text matches
         } for row in cursor.fetchall()]
 
-    def _build_context(self, files: List[Dict], max_chars: int = 2000) -> str:
+    def _build_context(self, files: List[Dict], max_chars: int = 1500) -> str:
         """Build context string from files."""
         context_parts = []
         total_chars = 0
@@ -316,8 +328,8 @@ Answer based on the context above:"""
                 continue
 
             # Truncate individual file content if needed
-            if len(content) > 1000:
-                content = content[:1000] + "..."
+            if len(content) > 800:
+                content = content[:800] + "..."
 
             file_context = f"[{f['path']}]\n{content}\n"
 
@@ -328,6 +340,107 @@ Answer based on the context above:"""
             total_chars += len(file_context)
 
         return "\n".join(context_parts)
+
+    def _find_relevant_entities(self, query: str, context_files: List[Dict],
+                                 max_entities: int = 10) -> str:
+        """
+        Find entities relevant to the query from the knowledge graph.
+
+        Searches for:
+        1. Entities matching query terms via FTS5
+        2. Entities extracted from relevant files
+        3. Related entities via relationships
+
+        Args:
+            query: The user's question
+            context_files: Files already found as relevant
+            max_entities: Maximum entities to include
+
+        Returns:
+            Formatted string of entity context
+        """
+        if not self.kg:
+            return ""
+
+        try:
+            entities_found = {}  # id -> (entity, source)
+            relationships_found = []
+
+            # 1. Search for entities matching query terms
+            try:
+                # FTS5 search for entities
+                matched_entities = self.kg.search_entities(query, limit=5)
+                for entity in matched_entities:
+                    if entity.id not in entities_found:
+                        entities_found[entity.id] = (entity, "query_match")
+            except Exception as e:
+                logger.debug(f"Entity FTS search failed: {e}")
+
+            # 2. Get entities from relevant files
+            for f in context_files[:3]:  # Limit to top 3 files
+                file_id = f.get('id')
+                if not file_id:
+                    continue
+                try:
+                    file_entities = self.kg.get_file_entities(file_id)
+                    for entity, rel_type, confidence in file_entities[:5]:
+                        if entity.id not in entities_found:
+                            entities_found[entity.id] = (entity, f"from:{f['path']}")
+                except Exception as e:
+                    logger.debug(f"File entity lookup failed: {e}")
+
+            # 3. Get related entities for high-confidence matches
+            top_entity_ids = list(entities_found.keys())[:3]
+            for eid in top_entity_ids:
+                try:
+                    related = self.kg.get_related_entities(eid, depth=1)
+                    for rel_entity in related[:3]:
+                        if rel_entity.id not in entities_found:
+                            entities_found[rel_entity.id] = (rel_entity, "related")
+
+                    # Get direct relationships for context
+                    rels = self.kg.get_relationships(eid)
+                    for rel in rels[:5]:
+                        source_entity = self.kg.get_entity_by_id(rel.source_id)
+                        target_entity = self.kg.get_entity_by_id(rel.target_id)
+                        if source_entity and target_entity:
+                            relationships_found.append(
+                                (source_entity.name, rel.relation_type.value, target_entity.name)
+                            )
+                except Exception as e:
+                    logger.debug(f"Related entity lookup failed: {e}")
+
+            # Build entity context string
+            if not entities_found and not relationships_found:
+                return ""
+
+            context_parts = []
+
+            # Add entities section
+            if entities_found:
+                context_parts.append("Entities:")
+                for eid, (entity, source) in list(entities_found.items())[:max_entities]:
+                    desc = entity.description[:100] + "..." if len(entity.description) > 100 else entity.description
+                    line = f"  - {entity.name} ({entity.entity_type.value})"
+                    if desc:
+                        line += f": {desc}"
+                    context_parts.append(line)
+
+            # Add relationships section
+            if relationships_found:
+                context_parts.append("\nRelationships:")
+                seen = set()
+                for src, rel, tgt in relationships_found[:10]:
+                    key = (src, rel, tgt)
+                    if key not in seen:
+                        seen.add(key)
+                        context_parts.append(f"  - {src} → {rel} → {tgt}")
+
+            return "\n".join(context_parts)
+
+        except Exception as e:
+            logger.error(f"Entity context building failed: {e}")
+            return ""
 
 
 class FileSummarizer:
