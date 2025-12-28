@@ -1,0 +1,28 @@
+{
+  "total": 15,
+  "passed": 13,
+  "failed": 2,
+  "pass_rate": 0.8666666666666667,
+  "by_category": {
+    "precision": {
+      "passed": 7,
+      "failed": 1,
+      "total_time": 104.45669960975647
+    },
+    "usefulness": {
+      "passed": 3,
+      "failed": 1,
+      "total_time": 48.22046756744385
+    },
+    "performance": {
+      "passed": 3,
+      "failed": 0,
+      "total_time": 32.15606093406677
+    }
+  },
+  "failed_tests": [
+    "voxelmosaic_identity",
+    "actionable_advice"
+  ],
+  "avg_time": 12.322215207417806
+}

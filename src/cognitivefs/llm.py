@@ -97,7 +97,7 @@ class OllamaClient:
                 method="POST"
             )
 
-            with urllib.request.urlopen(req, timeout=60) as resp:
+            with urllib.request.urlopen(req, timeout=15) as resp:
                 result = json.loads(resp.read().decode('utf-8'))
 
             return LLMResponse(
@@ -109,6 +109,11 @@ class OllamaClient:
                 eval_count=result.get("eval_count"),
             )
 
+        except urllib.error.URLError as e:
+            if 'timed out' in str(e).lower():
+                logger.warning("LLM query timed out (15s limit)")
+                return LLMResponse(content="Query timed out. Try a simpler question.", model=self.model, done=True)
+            logger.error(f"LLM generation failed: {e}")
         except Exception as e:
             logger.error(f"LLM generation failed: {e}")
             return None
@@ -150,7 +155,7 @@ class OllamaClient:
                 method="POST"
             )
 
-            with urllib.request.urlopen(req, timeout=60) as resp:
+            with urllib.request.urlopen(req, timeout=15) as resp:
                 result = json.loads(resp.read().decode('utf-8'))
 
             message = result.get("message", {})

@@ -87,6 +87,12 @@ class VirtualAIHandler:
         self.query_buffers: Dict[str, bytes] = {}  # session_id -> query
         self.response_buffers: Dict[str, bytes] = {}  # session_id -> response
 
+        # Async query system
+        self._query_results: Dict[str, Dict] = {}  # query_id -> {status, result, query}
+        self._query_counter = 0
+        self._query_thread = None
+        self._query_lock = __import__('threading').Lock()
+
         # Chat session state
         self.chat_sessions: Dict[str, List[Dict]] = {}  # session_name -> messages
 
@@ -438,26 +444,31 @@ class VirtualAIHandler:
 
     def _get_query_help(self) -> bytes:
         """Return help text for query."""
-        return b"""# Natural Language Query Interface
+        return b"""# Natural Language Query Interface (Async)
 
 ## Usage
 
-Query your knowledge base using natural language:
-    cat /.ai/query/what_do_you_know_about_machine_learning
-    cat /.ai/query/summarize+my+recent+notes
-    cat /.ai/query/find_files_about_cooking
+Submit a query (returns immediately with ID):
+    cat /.ai/query/what_is_machine_learning
+
+Check results (poll until complete):
+    cat /.ai/query/results/q1
+
+List all queries:
+    cat /.ai/query/pending
 
 ## How It Works
 
-1. Your query is embedded using the same model as your files
-2. Relevant files are retrieved based on semantic similarity
-3. An LLM generates an answer using the retrieved context
+1. Query is queued and processed in background (non-blocking)
+2. Returns query ID immediately
+3. Poll results endpoint until status is 'complete'
+4. LLM generates answer using indexed file context
 
 ## Tips
 
-- Use underscores (_) or plus signs (+) for spaces
-- Be specific in your queries for better results
-- The system searches all indexed files
+- Use underscores (_) for spaces in query path
+- Queries run in background - won't freeze filesystem
+- Results are cached until filesystem restart
 """
 
     def _write_query(self, target_path: str, parts: List[str], data: bytes, offset: int) -> int:
@@ -466,21 +477,102 @@ Query your knowledge base using natural language:
 
     def _process_query(self, query: str) -> str:
         """
-        Process a natural language query against the knowledge graph.
+        Process a natural language query - queues for async processing.
 
-        Uses LLM with RAG to answer questions based on indexed files.
+        Returns immediately with query ID. Check results via:
+          cat /.ai/query/results/<id>
         """
         if not query:
             return "Please enter a query.\n"
 
+        # Check if this is a results request
+        if query.startswith("results/"):
+            query_id = query[8:]
+            return self._get_query_result(query_id)
+
+        # Check if listing pending queries
+        if query == "pending":
+            return self._list_pending_queries()
+
+        # Queue new query
+        query_id = self._queue_async_query(query)
+        return f"Query queued with ID: {query_id}\n\nCheck results:\n  cat /.ai/query/results/{query_id}\n\nList pending:\n  cat /.ai/query/pending\n"
+
+    def _queue_async_query(self, query: str) -> str:
+        """Queue a query for async processing."""
+        import threading
+
+        with self._query_lock:
+            self._query_counter += 1
+            query_id = f"q{self._query_counter}"
+            self._query_results[query_id] = {
+                'status': 'pending',
+                'query': query,
+                'result': None,
+                'timestamp': time.time()
+            }
+
+        # Start background thread for this query
+        thread = threading.Thread(
+            target=self._run_async_query,
+            args=(query_id, query),
+            daemon=True
+        )
+        thread.start()
+
+        return query_id
+
+    def _run_async_query(self, query_id: str, query: str):
+        """Run query in background thread."""
         try:
             from .llm import get_query_engine
 
             engine = get_query_engine(self.knowledge_graph)
-            return engine.query(query)
+            result = engine.query(query)
+
+            with self._query_lock:
+                if query_id in self._query_results:
+                    self._query_results[query_id]['status'] = 'complete'
+                    self._query_results[query_id]['result'] = result
 
         except Exception as e:
-            return f"Query failed: {e}\n"
+            with self._query_lock:
+                if query_id in self._query_results:
+                    self._query_results[query_id]['status'] = 'error'
+                    self._query_results[query_id]['result'] = f"Error: {e}"
+
+    def _get_query_result(self, query_id: str) -> str:
+        """Get result of async query."""
+        with self._query_lock:
+            if query_id not in self._query_results:
+                return f"Query ID not found: {query_id}\n"
+
+            info = self._query_results[query_id]
+            status = info['status']
+            query = info['query']
+
+            if status == 'pending':
+                return f"Query '{query}' is still processing...\n\nTry again in a few seconds:\n  cat /.ai/query/results/{query_id}\n"
+            elif status == 'complete':
+                return info['result']
+            else:
+                return info['result']
+
+    def _list_pending_queries(self) -> str:
+        """List all pending/completed queries."""
+        lines = ["# Query Status", ""]
+
+        with self._query_lock:
+            if not self._query_results:
+                lines.append("No queries.")
+            else:
+                for qid, info in sorted(self._query_results.items(), reverse=True):
+                    status = info['status']
+                    query = info['query'][:40]
+                    lines.append(f"  {qid}: [{status}] {query}")
+
+        lines.append("")
+        return "\n".join(lines)
 
     # ==================== Summary operations ====================
 
@@ -559,26 +651,21 @@ Query your knowledge base using natural language:
                 ])
             return "\n".join(lines).encode('utf-8')
 
-        # Generate summary using LLM
-        try:
-            from .llm import get_summarizer
+        # LLM summary disabled for stability - show file preview instead
+        lines.append("(LLM summaries disabled for stability)")
+        lines.append("")
+        lines.append("## File Preview")
+        lines.append(file_content[:1000] if len(file_content) > 1000 else file_content)
+        if len(file_content) > 1000:
+            lines.append(f"\n... ({len(file_content) - 1000} more characters)")
+        lines.append("")
 
-            summarizer = get_summarizer()
-            summary_text = summarizer.summarize(file_content, target_path)
-
-            lines.append(summary_text)
-            lines.append("")
-
-            if file_info:
-                lines.extend([
-                    "---",
-                    f"Size: {file_info['size']} bytes | Modified: {file_info['modified']}",
-                    "",
-                ])
-
-        except Exception as e:
-            lines.append(f"Summary generation failed: {e}")
-            lines.append("")
+        if file_info:
+            lines.extend([
+                "---",
+                f"Size: {file_info['size']} bytes | Modified: {file_info['modified']}",
+                "",
+            ])
 
         return "\n".join(lines).encode('utf-8')
 
