@@ -402,9 +402,12 @@ class KnowledgeGraph:
             self.conn.commit()
 
         # Ensure unique index on embeddings (file_id, model) - fixes BUG-014
+        # SQLite partial indexes don't work with ON CONFLICT, so drop old partial
+        # index if it exists and create a regular one
+        cursor.execute("DROP INDEX IF EXISTS idx_emb_file_model")
         cursor.execute("""
-            CREATE UNIQUE INDEX IF NOT EXISTS idx_emb_file_model
-            ON embeddings(file_id, model) WHERE file_id IS NOT NULL
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_emb_file_model_v2
+            ON embeddings(file_id, model)
         """)
         self.conn.commit()
 

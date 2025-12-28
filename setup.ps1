@@ -53,22 +53,33 @@ foreach ($pkg in $corePackages) {
     }
 }
 
-# Step 3: Optional sentence-transformers
+# Step 3: Install sentence-transformers for embeddings
 Write-Host ""
-Write-Host "[3/3] Optional: AI Embeddings" -ForegroundColor Yellow
-Write-Host "  sentence-transformers enables semantic search but adds ~1GB download."
-$response = Read-Host "  Install sentence-transformers? (y/N)"
-if ($response -eq "y" -or $response -eq "Y") {
-    Write-Host "  Installing sentence-transformers (this may take a while)..."
-    python -m pip install sentence-transformers
-    if ($LASTEXITCODE -eq 0) {
-        Write-Host "  sentence-transformers installed." -ForegroundColor Green
+Write-Host "[3/3] Installing AI Embeddings..." -ForegroundColor Yellow
+Write-Host "  Installing sentence-transformers for semantic search..."
+python -m pip install sentence-transformers --quiet
+if ($LASTEXITCODE -eq 0) {
+    Write-Host "  sentence-transformers installed." -ForegroundColor Green
+
+    # Check CUDA availability
+    Write-Host "  Checking GPU availability..." -NoNewline
+    $cudaCheck = python -c "import torch; print('cuda' if torch.cuda.is_available() else 'cpu')" 2>$null
+    if ($cudaCheck -eq "cuda") {
+        $gpuName = python -c "import torch; print(torch.cuda.get_device_name(0))" 2>$null
+        Write-Host " GPU detected: $gpuName" -ForegroundColor Green
     } else {
-        Write-Host "  Installation failed. Semantic search will be disabled." -ForegroundColor Yellow
+        Write-Host " CPU only (no CUDA GPU)" -ForegroundColor Yellow
     }
 } else {
-    Write-Host "  Skipped. Semantic search will be disabled." -ForegroundColor Yellow
+    Write-Host "  Installation failed. Semantic search will be disabled." -ForegroundColor Yellow
 }
+
+# Show embedding model info
+Write-Host ""
+Write-Host "  Default embedding model: BAAI/bge-base-en-v1.5 (768 dims)" -ForegroundColor Cyan
+Write-Host "  To change model, set COGNITIVEFS_EMBEDDING_MODEL env var:" -ForegroundColor Gray
+Write-Host "    \$env:COGNITIVEFS_EMBEDDING_MODEL = 'all-MiniLM-L6-v2'  # Fast" -ForegroundColor Gray
+Write-Host "    \$env:COGNITIVEFS_EMBEDDING_MODEL = 'BAAI/bge-large-en-v1.5'  # Best" -ForegroundColor Gray
 
 # Summary
 Write-Host ""

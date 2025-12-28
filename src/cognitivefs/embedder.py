@@ -13,27 +13,51 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+# Available embedding models (name -> dimensions)
+EMBEDDING_MODELS = {
+    # Strong models (recommended for quality)
+    "BAAI/bge-base-en-v1.5": 768,      # Best quality/size balance, ~440MB
+    "BAAI/bge-large-en-v1.5": 1024,    # Highest quality, ~1.3GB
+    "all-mpnet-base-v2": 768,          # Very good general purpose, ~420MB
+    # Fast models (for lower-end hardware)
+    "all-MiniLM-L6-v2": 384,           # Fast, decent quality, ~80MB
+    "all-MiniLM-L12-v2": 384,          # Balanced, ~120MB
+    # Multilingual
+    "BAAI/bge-m3": 1024,               # Multilingual, ~2.3GB
+}
+
+# Default: strong local model with good quality/size balance
+DEFAULT_MODEL = "BAAI/bge-base-en-v1.5"
+
+
 class EmbeddingGenerator:
     """
     Generate vector embeddings using sentence-transformers.
 
-    Uses all-MiniLM-L6-v2 model by default (384 dimensions).
-    Model is lazy-loaded on first use to avoid startup delay.
-    """
+    Default model: BAAI/bge-base-en-v1.5 (768 dimensions, ~440MB)
+    Override via COGNITIVEFS_EMBEDDING_MODEL environment variable.
 
-    MODEL_NAME = "all-MiniLM-L6-v2"
-    DIMENSIONS = 384
+    Model is lazy-loaded on first use to avoid startup delay.
+    Uses GPU (CUDA) if available for faster inference.
+    """
 
     def __init__(self, model_name: Optional[str] = None):
         """
         Initialize embedding generator.
 
         Args:
-            model_name: Optional model name override
+            model_name: Optional model name override.
+                        Can also be set via COGNITIVEFS_EMBEDDING_MODEL env var.
         """
-        self.model_name = model_name or self.MODEL_NAME
+        import os
+        self.model_name = (
+            model_name or
+            os.environ.get("COGNITIVEFS_EMBEDDING_MODEL") or
+            DEFAULT_MODEL
+        )
         self._model = None
         self._available = None  # None = not checked, True/False = checked
+        self._device = None
 
     @property
     def is_available(self) -> bool:
@@ -57,21 +81,22 @@ class EmbeddingGenerator:
     @property
     def dimensions(self) -> int:
         """Get embedding dimensions for current model."""
-        if self.model_name == "all-MiniLM-L6-v2":
-            return 384
-        elif self.model_name == "all-mpnet-base-v2":
-            return 768
-        elif self.model_name == "all-MiniLM-L12-v2":
-            return 384
-        else:
-            # Load model to get dimensions
-            self._load_model()
-            if self._model:
-                return self._model.get_sentence_embedding_dimension()
-            return 384  # Default fallback
+        # Check known models first
+        if self.model_name in EMBEDDING_MODELS:
+            return EMBEDDING_MODELS[self.model_name]
+        # Load model to get dimensions for unknown models
+        self._load_model()
+        if self._model:
+            return self._model.get_sentence_embedding_dimension()
+        return 768  # Default fallback for BGE-style models
+
+    @property
+    def device(self) -> str:
+        """Get device being used (cuda/cpu)."""
+        return self._device or "cpu"
 
     def _load_model(self):
-        """Lazy load the embedding model."""
+        """Lazy load the embedding model with GPU support."""
         if self._model is not None:
             return
 
@@ -79,10 +104,23 @@ class EmbeddingGenerator:
             return
 
         try:
+            import torch
             from sentence_transformers import SentenceTransformer
+
+            # Detect best device
+            if torch.cuda.is_available():
+                self._device = "cuda"
+                gpu_name = torch.cuda.get_device_name(0)
+                logger.info(f"CUDA available: {gpu_name}")
+            else:
+                self._device = "cpu"
+                logger.info("CUDA not available, using CPU")
+
             logger.info(f"Loading embedding model: {self.model_name}")
-            self._model = SentenceTransformer(self.model_name)
-            logger.info(f"Model loaded. Dimensions: {self._model.get_sentence_embedding_dimension()}")
+            self._model = SentenceTransformer(self.model_name, device=self._device)
+            dims = self._model.get_sentence_embedding_dimension()
+            logger.info(f"Model loaded on {self._device}. Dimensions: {dims}")
+
         except Exception as e:
             logger.error(f"Failed to load embedding model: {e}")
             self._available = False

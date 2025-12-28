@@ -79,6 +79,53 @@ amnesiafs/
 └── requirements.txt         # Python dependencies
 ```
 
+## Embedding Models
+
+AmnesiaFS uses sentence-transformers for semantic search. The default model is **BAAI/bge-base-en-v1.5** which provides excellent quality for local use.
+
+### Available Models
+
+| Model | Dimensions | Size | Quality | Speed |
+|-------|------------|------|---------|-------|
+| `BAAI/bge-base-en-v1.5` | 768 | ~440MB | Excellent | Good |
+| `BAAI/bge-large-en-v1.5` | 1024 | ~1.3GB | Best | Slower |
+| `all-mpnet-base-v2` | 768 | ~420MB | Very Good | Good |
+| `all-MiniLM-L6-v2` | 384 | ~80MB | Good | Fast |
+| `BAAI/bge-m3` | 1024 | ~2.3GB | Best (multilingual) | Slow |
+
+### Changing the Model
+
+Set the `COGNITIVEFS_EMBEDDING_MODEL` environment variable:
+
+```powershell
+# Use the large model for best quality
+$env:COGNITIVEFS_EMBEDDING_MODEL = "BAAI/bge-large-en-v1.5"
+python tools/mount.py test.img K:
+
+# Or use the fast model for lower-end hardware
+$env:COGNITIVEFS_EMBEDDING_MODEL = "all-MiniLM-L6-v2"
+python tools/mount.py test.img K:
+```
+
+### GPU Acceleration
+
+If you have an NVIDIA GPU with CUDA, embeddings will automatically use GPU acceleration. Install PyTorch with CUDA support:
+
+```powershell
+# Check if CUDA is available
+python -c "import torch; print(f'CUDA: {torch.cuda.is_available()}')"
+
+# Install PyTorch with CUDA (if not already installed)
+pip install torch --index-url https://download.pytorch.org/whl/cu124
+```
+
+The mount log will show which device is being used:
+```
+Loading embedding model: BAAI/bge-base-en-v1.5
+CUDA available: NVIDIA GeForce RTX 3080
+Model loaded on cuda. Dimensions: 768
+```
+
 ## Troubleshooting
 
 ### "FUSE library not installed"

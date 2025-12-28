@@ -9,5 +9,7 @@ rich>=13.0.0
 pyyaml>=6.0
 psutil>=5.9.0
 
-# Optional - AI/ML (adds ~1GB, enables semantic search)
-# sentence-transformers>=2.2.0
+# AI/ML - enables semantic search with embeddings
+# Default model: BAAI/bge-base-en-v1.5 (768 dims, ~440MB)
+# Set COGNITIVEFS_EMBEDDING_MODEL env var to change model
+sentence-transformers>=2.2.0
