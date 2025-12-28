@@ -1226,25 +1226,81 @@ Query your knowledge base using natural language:
         if not target_path:
             return self._make_dir_stat(now)
 
-        # Various graph query endpoints
+        # Static query endpoints
         if len(parts) == 2:
             query_type = parts[1]
-            if query_type in ("entities", "relationships", "stats"):
+            if query_type in ("entities", "relationships", "stats", "connections", "context", "query"):
+                if query_type in ("connections", "context", "query"):
+                    # These are directories with subpaths
+                    return self._make_dir_stat(now)
                 content = self._get_graph_content(query_type)
                 return self._make_file_stat(len(content), now)
+
+        # /.ai/graph/connections/<entity1>/<entity2>
+        if len(parts) >= 3 and parts[1] == "connections":
+            return self._make_file_stat(4096, now)
+
+        # /.ai/graph/context/<entity_name>
+        if len(parts) >= 3 and parts[1] == "context":
+            return self._make_file_stat(4096, now)
+
+        # /.ai/graph/query/<question>
+        if len(parts) >= 3 and parts[1] == "query":
+            return self._make_file_stat(4096, now)
 
         return None
 
     def _readdir_graph(self, target_path: str) -> List[str]:
         """List graph query endpoints."""
         if not target_path:
-            return ["entities", "relationships", "stats"]
+            return ["entities", "relationships", "stats", "connections", "context", "query", "_help.txt"]
+
+        parts = target_path.strip('/').split('/')
+        if len(parts) == 1:
+            subdir = parts[0]
+            if subdir == "connections":
+                return ["_help.txt"]
+            elif subdir == "context":
+                return ["_help.txt"]
+            elif subdir == "query":
+                return ["_help.txt"]
+
         return []
 
     def _read_graph(self, target_path: str, parts: List[str]) -> bytes:
         """Read graph query results."""
         if len(parts) == 2:
-            return self._get_graph_content(parts[1])
+            query_type = parts[1]
+            if query_type == "_help.txt":
+                return self._get_graph_help()
+            return self._get_graph_content(query_type)
+
+        # /.ai/graph/connections/<entity1>/<entity2>
+        if len(parts) >= 3 and parts[1] == "connections":
+            if parts[2] == "_help.txt":
+                return self._get_connections_help()
+            if len(parts) >= 4:
+                entity1 = parts[2].replace("_", " ")
+                entity2 = parts[3].replace("_", " ")
+                return self._find_entity_connections(entity1, entity2)
+            # Just entity1 - list its connections
+            entity1 = parts[2].replace("_", " ")
+            return self._get_entity_connections(entity1)
+
+        # /.ai/graph/context/<entity_name>
+        if len(parts) >= 3 and parts[1] == "context":
+            if parts[2] == "_help.txt":
+                return self._get_context_help()
+            entity_name = "/".join(parts[2:]).replace("_", " ")
+            return self._get_entity_full_context(entity_name)
+
+        # /.ai/graph/query/<question>
+        if len(parts) >= 3 and parts[1] == "query":
+            if parts[2] == "_help.txt":
+                return self._get_graph_query_help()
+            question = "/".join(parts[2:]).replace("_", " ").replace("+", " ")
+            return self._execute_graph_query(question)
+
         return b""
 
     def _get_graph_content(self, query_type: str) -> bytes:
@@ -1299,6 +1355,305 @@ Query your knowledge base using natural language:
             return "\n".join(lines).encode('utf-8')
 
         return b""
+
+    def _get_graph_help(self) -> bytes:
+        """Return help for the knowledge graph interface."""
+        return b"""# Knowledge Graph Interface
+
+## Available Endpoints
+
+### Static Views
+  cat /.ai/graph/stats         - Graph statistics (JSON)
+  cat /.ai/graph/entities      - List all entities by type
+  cat /.ai/graph/relationships - Relationship summary
+
+### Multi-Hop Queries
+  cat /.ai/graph/connections/<entity1>/<entity2>  - Find path between entities
+  cat /.ai/graph/context/<entity>                 - Full context for entity
+  cat /.ai/graph/query/<question>                 - Natural language query
+
+## Examples
+
+  cat /.ai/graph/connections/machine_learning/neural_networks
+  cat /.ai/graph/context/John_Smith
+  cat /.ai/graph/query/what_concepts_are_related_to_AI
+
+## How It Works
+
+The knowledge graph stores:
+- Entities (people, places, concepts, etc.) extracted from files
+- Relationships (co-occurrence, similarity, references)
+- Embeddings for semantic search
+
+Multi-hop queries traverse these relationships to find connections.
+"""
+
+    def _get_connections_help(self) -> bytes:
+        """Return help for entity connections."""
+        return b"""# Find Connections Between Entities
+
+## Usage
+
+Find path between two entities:
+  cat /.ai/graph/connections/<entity1>/<entity2>
+
+Get all connections for one entity:
+  cat /.ai/graph/connections/<entity>
+
+## Examples
+
+  cat /.ai/graph/connections/machine_learning/neural_networks
+  cat /.ai/graph/connections/John_Smith/Project_Alpha
+  cat /.ai/graph/connections/Python
+
+## Notes
+
+- Use underscores for spaces in entity names
+- Maximum 3 hops by default
+- Returns all paths found between entities
+"""
+
+    def _get_context_help(self) -> bytes:
+        """Return help for entity context."""
+        return b"""# Get Full Context for an Entity
+
+## Usage
+
+  cat /.ai/graph/context/<entity_name>
+
+## Returns
+
+- Entity details (type, description)
+- Related entities (2 hops)
+- Files mentioning this entity
+- Relationship types
+
+## Examples
+
+  cat /.ai/graph/context/machine_learning
+  cat /.ai/graph/context/John_Smith
+  cat /.ai/graph/context/Project_Alpha
+"""
+
+    def _get_graph_query_help(self) -> bytes:
+        """Return help for graph queries."""
+        return b"""# Natural Language Graph Query
+
+## Usage
+
+  cat /.ai/graph/query/<your_question>
+
+## Examples
+
+  cat /.ai/graph/query/what_concepts_are_related_to_machine_learning
+  cat /.ai/graph/query/how_is_John_connected_to_Project_Alpha
+  cat /.ai/graph/query/what_files_mention_neural_networks
+
+## How It Works
+
+1. Extracts entities from your question
+2. Traverses the knowledge graph
+3. Collects relevant context
+4. Returns structured answer with evidence
+"""
+
+    def _find_entity_connections(self, entity1: str, entity2: str) -> bytes:
+        """Find paths between two entities in the knowledge graph."""
+        if not self.knowledge_graph:
+            return b"Knowledge graph not initialized.\n"
+
+        try:
+            from .relationship_detector import MultiHopQueryEngine
+
+            engine = MultiHopQueryEngine(self.knowledge_graph)
+            paths = engine.find_connections(entity1, entity2, max_hops=3)
+
+            lines = [
+                f"# Connections: {entity1} -> {entity2}",
+                ""
+            ]
+
+            if not paths:
+                lines.append(f"No path found between '{entity1}' and '{entity2}'")
+                lines.append("")
+                lines.append("Possible reasons:")
+                lines.append("  - Entities not in knowledge graph")
+                lines.append("  - No connecting relationships within 3 hops")
+                lines.append("")
+                lines.append("Try:")
+                lines.append(f"  cat /.ai/graph/context/{entity1.replace(' ', '_')}")
+            else:
+                lines.append(f"Found {len(paths)} path(s):")
+                lines.append("")
+
+                for i, path in enumerate(paths[:5], 1):
+                    lines.append(f"## Path {i} ({len(path)-1} hops)")
+                    path_str = " -> ".join(f"{e['name']} ({e['type']})" for e in path)
+                    lines.append(f"  {path_str}")
+                    lines.append("")
+
+            return "\n".join(lines).encode('utf-8')
+
+        except Exception as e:
+            return f"Error finding connections: {e}\n".encode('utf-8')
+
+    def _get_entity_connections(self, entity_name: str) -> bytes:
+        """Get all connections for a single entity."""
+        if not self.knowledge_graph:
+            return b"Knowledge graph not initialized.\n"
+
+        try:
+            from .relationship_detector import MultiHopQueryEngine
+
+            engine = MultiHopQueryEngine(self.knowledge_graph)
+            context = engine.get_entity_context(entity_name, depth=1)
+
+            if 'error' in context:
+                return f"{context['error']}\n".encode('utf-8')
+
+            entity = context['entity']
+            related = context.get('related_entities', [])
+            relationships = context.get('relationships', [])
+
+            lines = [
+                f"# Connections for: {entity['name']}",
+                f"Type: {entity['type']}",
+                f"Referenced in {entity['source_count']} files",
+                ""
+            ]
+
+            if related:
+                lines.append(f"## Related Entities ({len(related)})")
+                for e in related[:20]:
+                    lines.append(f"  - {e['name']} ({e['type']})")
+                lines.append("")
+
+            if relationships:
+                lines.append(f"## Relationships ({len(relationships)})")
+                for r in relationships[:20]:
+                    rel_type = r['type']
+                    target = self.knowledge_graph.get_entity_by_id(r['target_id'])
+                    target_name = target.name if target else f"id:{r['target_id']}"
+                    lines.append(f"  - {rel_type} -> {target_name}")
+                lines.append("")
+
+            return "\n".join(lines).encode('utf-8')
+
+        except Exception as e:
+            return f"Error getting connections: {e}\n".encode('utf-8')
+
+    def _get_entity_full_context(self, entity_name: str) -> bytes:
+        """Get full context for an entity including related entities and files."""
+        if not self.knowledge_graph:
+            return b"Knowledge graph not initialized.\n"
+
+        try:
+            from .relationship_detector import MultiHopQueryEngine
+
+            engine = MultiHopQueryEngine(self.knowledge_graph)
+            context = engine.get_entity_context(entity_name, depth=2)
+
+            if 'error' in context:
+                return f"{context['error']}\n".encode('utf-8')
+
+            entity = context['entity']
+            related = context.get('related_entities', [])
+            files = context.get('files', [])
+            relationships = context.get('relationships', [])
+
+            lines = [
+                f"# Entity: {entity['name']}",
+                f"Type: {entity['type']}",
+                f"References: {entity['source_count']}",
+                ""
+            ]
+
+            if files:
+                lines.append(f"## Files ({len(files)})")
+                for f in files:
+                    lines.append(f"  - {f['path']}")
+                    if f.get('summary'):
+                        lines.append(f"    {f['summary'][:100]}...")
+                lines.append("")
+
+            if related:
+                lines.append(f"## Related Entities ({len(related)})")
+                # Group by type
+                by_type = {}
+                for e in related:
+                    etype = e['type']
+                    if etype not in by_type:
+                        by_type[etype] = []
+                    by_type[etype].append(e['name'])
+
+                for etype, names in by_type.items():
+                    lines.append(f"  {etype}:")
+                    for name in names[:10]:
+                        lines.append(f"    - {name}")
+                    if len(names) > 10:
+                        lines.append(f"    ... and {len(names)-10} more")
+                lines.append("")
+
+            if relationships:
+                lines.append(f"## Direct Relationships ({len(relationships)})")
+                for r in relationships[:10]:
+                    target = self.knowledge_graph.get_entity_by_id(r['target_id'])
+                    target_name = target.name if target else f"id:{r['target_id']}"
+                    lines.append(f"  - {r['type']} -> {target_name} (weight: {r['weight']:.2f})")
+                lines.append("")
+
+            return "\n".join(lines).encode('utf-8')
+
+        except Exception as e:
+            return f"Error getting context: {e}\n".encode('utf-8')
+
+    def _execute_graph_query(self, question: str) -> bytes:
+        """Execute a natural language query against the knowledge graph."""
+        if not self.knowledge_graph:
+            return b"Knowledge graph not initialized.\n"
+
+        try:
+            from .relationship_detector import MultiHopQueryEngine
+
+            engine = MultiHopQueryEngine(self.knowledge_graph)
+            result = engine.query_graph(question)
+
+            lines = [
+                f"# Graph Query: {question}",
+                ""
+            ]
+
+            lines.append("## Answer")
+            lines.append(result.get('answer', 'No answer found.'))
+            lines.append("")
+
+            entities = result.get('entities', [])
+            if entities:
+                lines.append("## Entities Found")
+                for e in entities:
+                    lines.append(f"  - {e['name']} ({e['type']})")
+                lines.append("")
+
+            related = result.get('related', [])
+            if related:
+                lines.append("## Related Entities")
+                for e in related[:10]:
+                    lines.append(f"  - {e['name']} ({e['type']})")
+                lines.append("")
+
+            evidence = result.get('evidence', [])
+            if evidence:
+                lines.append("## Evidence (from files)")
+                for ev in evidence[:3]:
+                    lines.append(f"  {ev['file']}:")
+                    if ev.get('text'):
+                        lines.append(f"    {ev['text'][:200]}...")
+                    lines.append("")
+
+            return "\n".join(lines).encode('utf-8')
+
+        except Exception as e:
+            return f"Error executing query: {e}\n".encode('utf-8')
 
     # ==================== Mirror operations ====================
 

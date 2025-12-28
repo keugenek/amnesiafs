@@ -16,6 +16,7 @@ from queue import Queue, Empty
 from .knowledge_graph import KnowledgeGraph, FileRecord, Entity, EntityType, Embedding
 from .extractor import ContentExtractor, EntityExtractor, extract_all, ExtractedEntityType
 from .embedder import EmbeddingGenerator
+from .relationship_detector import RelationshipDetector
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +67,7 @@ class BackgroundProcessor:
         self.entity_extractor = entity_extractor or EntityExtractor()
         self.embedding_generator = embedding_generator or EmbeddingGenerator()
         self.poll_interval = poll_interval
+        self.relationship_detector = RelationshipDetector(knowledge_graph)
 
         self.running = False
         self.thread: Optional[threading.Thread] = None
@@ -207,12 +209,16 @@ class BackgroundProcessor:
             # Process entities
             self._process_entities(file_id, result.entities)
 
+            # Detect relationships between entities in this file
+            relationships = self._detect_relationships(file_id)
+
             # Generate embedding
             self._generate_embedding(file_id, result.text)
 
             success = True
             logger.info(f"Successfully processed {path}: "
                        f"{len(result.entities)} entities, "
+                       f"{relationships} relationships, "
                        f"{len(result.keywords)} keywords")
 
         except Exception as e:
@@ -254,6 +260,28 @@ class BackgroundProcessor:
                     confidence=extracted.confidence,
                     context=extracted.context[:200]  # Limit context
                 )
+
+    def _detect_relationships(self, file_id: int) -> int:
+        """
+        Detect relationships between entities in the file.
+
+        Creates RELATED_TO relationships between entities that
+        co-occur in the same file.
+
+        Args:
+            file_id: ID of the file to process
+
+        Returns:
+            Number of relationships created
+        """
+        try:
+            relationships = self.relationship_detector.detect_for_file(file_id)
+            for rel in relationships:
+                self.relationship_detector._save_relationship(rel)
+            return len(relationships)
+        except Exception as e:
+            logger.debug(f"Relationship detection failed: {e}")
+            return 0
 
     def _generate_embedding(self, file_id: int, text: str):
         """Generate and store embedding for file."""
