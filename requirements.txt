@@ -34,6 +34,12 @@ rich>=13.0.0
 click>=8.1.0
 typer>=0.9.0
 
+# RAG evaluation
+ragas>=0.1.10
+langchain-openai>=0.1.7
+langchain-core>=0.2.0
+pandas>=2.0.0
+
 # Utilities
 pyyaml>=6.0
 python-dotenv>=1.0.0
