@@ -522,6 +522,16 @@ class KnowledgeGraph:
         ))
 
         self.conn.commit()
+
+        # lastrowid is 0 on conflict/update, so query for actual ID
+        if cursor.lastrowid == 0:
+            cursor.execute("""
+                SELECT id FROM entities
+                WHERE entity_type = ? AND normalized_name = ?
+            """, (entity.entity_type.value, normalized))
+            row = cursor.fetchone()
+            return row['id'] if row else 0
+
         return cursor.lastrowid
 
     def get_entity(self, entity_type: EntityType, name: str) -> Optional[Entity]:
