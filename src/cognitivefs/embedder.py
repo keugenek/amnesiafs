@@ -38,6 +38,9 @@ class EmbeddingGenerator:
     @property
     def is_available(self) -> bool:
         """Check if sentence-transformers is available."""
+        # Allow recovery from temporary failures - recheck if previously failed
+        if self._available is False:
+            self._available = None
         if self._available is None:
             try:
                 import sentence_transformers
