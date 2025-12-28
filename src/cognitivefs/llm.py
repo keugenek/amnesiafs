@@ -200,22 +200,60 @@ Be concise and direct. Reference specific files when relevant."""
         Returns:
             Answer string
         """
+        result = self.query_with_context(question, max_context_files)
+        return result.get('formatted_response', 'No response generated.\n')
+
+    def query_with_context(self, question: str, max_context_files: int = 3) -> Dict:
+        """
+        Answer a question and return full context for transparency.
+
+        Args:
+            question: Natural language question
+            max_context_files: Maximum number of files to include as context
+
+        Returns:
+            Dict with answer, files_used, entities_used, relationships_used
+        """
+        result = {
+            'question': question,
+            'answer': '',
+            'files_used': [],
+            'entities_used': [],
+            'relationships_used': [],
+            'llm_available': self.llm.is_available,
+            'formatted_response': ''
+        }
+
         if not self.llm.is_available:
-            return "LLM not available. Please ensure Ollama is running.\n"
+            result['answer'] = "LLM not available. Please ensure Ollama is running."
+            result['formatted_response'] = result['answer'] + "\n"
+            return result
 
         # 1. Find relevant files using semantic search
         context_files = self._find_relevant_files(question, max_context_files)
+        result['files_used'] = [
+            {'path': f['path'], 'similarity': f.get('similarity', 0)}
+            for f in context_files
+        ]
 
         # 2. Find relevant entities from the knowledge graph
-        entity_context = self._find_relevant_entities(question, context_files)
+        entity_context, entities_found, relationships_found = self._find_relevant_entities_detailed(
+            question, context_files
+        )
+        result['entities_used'] = entities_found
+        result['relationships_used'] = relationships_found
 
         if not context_files and not entity_context:
             # No indexed content, still try to answer
             prompt = f"Question: {question}\n\nNo files have been indexed yet. Please let the user know they should add some files first."
             response = self.llm.generate(prompt, system=self.SYSTEM_PROMPT)
             if response:
-                return response.content
-            return "No files indexed and LLM unavailable.\n"
+                result['answer'] = response.content
+                result['formatted_response'] = response.content
+            else:
+                result['answer'] = "No files indexed and LLM unavailable."
+                result['formatted_response'] = result['answer'] + "\n"
+            return result
 
         # 3. Build context from files and entities
         file_context = self._build_context(context_files) if context_files else ""
@@ -238,13 +276,17 @@ Answer based on the context above. Reference specific files and entities when re
         response = self.llm.generate(prompt, system=self.SYSTEM_PROMPT, max_tokens=256)
 
         if response:
-            # Add source references
+            result['answer'] = response.content
+            # Format response with sources
             sources = "\n\nSources:\n"
             if context_files:
                 sources += "\n".join(f"  - {f['path']}" for f in context_files)
-            return response.content + sources + "\n"
+            result['formatted_response'] = response.content + sources + "\n"
+        else:
+            result['answer'] = "Failed to generate response."
+            result['formatted_response'] = result['answer'] + "\n"
 
-        return "Failed to generate response.\n"
+        return result
 
     def _find_relevant_files(self, query: str, limit: int) -> List[Dict]:
         """Find files relevant to the query using embeddings."""
@@ -346,6 +388,17 @@ Answer based on the context above. Reference specific files and entities when re
         """
         Find entities relevant to the query from the knowledge graph.
 
+        Returns:
+            Formatted string of entity context
+        """
+        context, _, _ = self._find_relevant_entities_detailed(query, context_files, max_entities)
+        return context
+
+    def _find_relevant_entities_detailed(self, query: str, context_files: List[Dict],
+                                          max_entities: int = 10) -> tuple:
+        """
+        Find entities relevant to the query with full details for transparency.
+
         Searches for:
         1. Entities matching query terms via FTS5
         2. Entities extracted from relevant files
@@ -357,10 +410,13 @@ Answer based on the context above. Reference specific files and entities when re
             max_entities: Maximum entities to include
 
         Returns:
-            Formatted string of entity context
+            Tuple of (context_string, entities_list, relationships_list)
         """
         if not self.kg:
-            return ""
+            return "", [], []
+
+        entities_list = []  # For transparency output
+        relationships_list = []  # For transparency output
 
         try:
             entities_found = {}  # id -> (entity, source)
@@ -412,11 +468,11 @@ Answer based on the context above. Reference specific files and entities when re
 
             # Build entity context string
             if not entities_found and not relationships_found:
-                return ""
+                return "", [], []
 
             context_parts = []
 
-            # Add entities section
+            # Add entities section and build transparency list
             if entities_found:
                 context_parts.append("Entities:")
                 for eid, (entity, source) in list(entities_found.items())[:max_entities]:
@@ -425,8 +481,15 @@ Answer based on the context above. Reference specific files and entities when re
                     if desc:
                         line += f": {desc}"
                     context_parts.append(line)
+                    # Add to transparency list
+                    entities_list.append({
+                        'name': entity.name,
+                        'type': entity.entity_type.value,
+                        'source': source,
+                        'refs': entity.source_count
+                    })
 
-            # Add relationships section
+            # Add relationships section and build transparency list
             if relationships_found:
                 context_parts.append("\nRelationships:")
                 seen = set()
@@ -435,12 +498,18 @@ Answer based on the context above. Reference specific files and entities when re
                     if key not in seen:
                         seen.add(key)
                         context_parts.append(f"  - {src} → {rel} → {tgt}")
+                        # Add to transparency list
+                        relationships_list.append({
+                            'source': src,
+                            'relation': rel,
+                            'target': tgt
+                        })
 
-            return "\n".join(context_parts)
+            return "\n".join(context_parts), entities_list, relationships_list
 
         except Exception as e:
             logger.error(f"Entity context building failed: {e}")
-            return ""
+            return "", [], []
 
 
 class FileSummarizer:

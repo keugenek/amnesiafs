@@ -70,7 +70,7 @@ class VirtualAIHandler:
         "by-topic": VirtualNodeType.DIRECTORY,
         "by-date": VirtualNodeType.DIRECTORY,
         "chat": VirtualNodeType.CHAT,
-        "status": VirtualNodeType.STATUS,
+        "status": VirtualNodeType.DIRECTORY,  # Status dir with index, etc.
         "graph": VirtualNodeType.GRAPH,
     }
 
@@ -151,10 +151,6 @@ class VirtualAIHandler:
             if node_type in (VirtualNodeType.DIRECTORY, VirtualNodeType.QUERY,
                            VirtualNodeType.CHAT, VirtualNodeType.GRAPH):
                 return self._make_dir_stat(now)
-            elif node_type == VirtualNodeType.STATUS:
-                # Status is a file
-                content = self._get_status_content()
-                return self._make_file_stat(len(content), now)
 
         # Handle specific virtual paths
         if subdir == "query":
@@ -177,6 +173,10 @@ class VirtualAIHandler:
             return self._getattr_by_date(target_path, parts)
         elif subdir == "graph":
             return self._getattr_graph(target_path, parts)
+        elif subdir == "status":
+            # Status with subpath (e.g., /.ai/status/index)
+            content = self._read_status(target_path, parts)
+            return self._make_file_stat(len(content), now)
 
         return None
 
@@ -213,6 +213,9 @@ class VirtualAIHandler:
         elif subdir in ("summary", "related"):
             # These mirror the real filesystem structure
             return self._readdir_mirror(target_path)
+        elif subdir == "status":
+            # List available status endpoints
+            return ["index", "overview"]
 
         return []
 
@@ -228,7 +231,7 @@ class VirtualAIHandler:
         content = b""
 
         if subdir == "status":
-            content = self._get_status_content()
+            content = self._read_status(target_path, parts)
         elif subdir == "query":
             content = self._read_query(target_path, parts)
         elif subdir == "summary":
@@ -407,6 +410,112 @@ class VirtualAIHandler:
 
         return json.dumps(status, indent=2).encode('utf-8') + b"\n"
 
+    def _read_status(self, target_path: str, parts: List[str]) -> bytes:
+        """Read status information with optional subpath."""
+        if not target_path or target_path == "/":
+            return self._get_status_content()
+
+        # Handle /.ai/status/index - detailed indexing status
+        if target_path in ("/index", "index"):
+            return self._get_index_status()
+
+        # Handle /.ai/status/overview - general status
+        if target_path in ("/overview", "overview"):
+            return self._get_status_content()
+
+        return self._get_status_content()
+
+    def _get_index_status(self) -> bytes:
+        """Get detailed indexing status."""
+        lines = [
+            "# Index Status",
+            f"Timestamp: {time.strftime('%Y-%m-%d %H:%M:%S')}",
+            ""
+        ]
+
+        if not self.knowledge_graph:
+            lines.append("Knowledge graph not initialized.")
+            return "\n".join(lines).encode('utf-8')
+
+        # Get file counts
+        try:
+            cursor = self.knowledge_graph.conn.cursor()
+
+            # Total indexed files
+            cursor.execute("SELECT COUNT(*) FROM files")
+            total_files = cursor.fetchone()[0]
+
+            # Files with embeddings
+            cursor.execute("SELECT COUNT(*) FROM files WHERE embedding_id IS NOT NULL")
+            files_with_embeddings = cursor.fetchone()[0]
+
+            # Files with extracted text
+            cursor.execute("SELECT COUNT(*) FROM files WHERE extracted_text IS NOT NULL AND extracted_text != ''")
+            files_with_text = cursor.fetchone()[0]
+
+            # Most recent file
+            cursor.execute("SELECT path, updated_at FROM files ORDER BY updated_at DESC LIMIT 1")
+            recent = cursor.fetchone()
+            last_indexed_path = recent[0] if recent else "N/A"
+            last_indexed_time = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(recent[1])) if recent else "N/A"
+
+            lines.append("## Files")
+            lines.append(f"  Total indexed: {total_files}")
+            lines.append(f"  With embeddings: {files_with_embeddings}")
+            lines.append(f"  With extracted text: {files_with_text}")
+            lines.append(f"  Last indexed: {last_indexed_path}")
+            lines.append(f"  Last indexed at: {last_indexed_time}")
+            lines.append("")
+
+            # Entity counts
+            cursor.execute("SELECT COUNT(*) FROM entities")
+            total_entities = cursor.fetchone()[0]
+
+            cursor.execute("SELECT COUNT(*) FROM relationships")
+            total_relationships = cursor.fetchone()[0]
+
+            cursor.execute("SELECT COUNT(*) FROM embeddings")
+            total_embeddings = cursor.fetchone()[0]
+
+            lines.append("## Knowledge Graph")
+            lines.append(f"  Entities: {total_entities}")
+            lines.append(f"  Relationships: {total_relationships}")
+            lines.append(f"  Embeddings: {total_embeddings}")
+            lines.append("")
+
+            # Processing queue
+            cursor.execute("SELECT COUNT(*) FROM processing_queue WHERE status = 'pending'")
+            pending = cursor.fetchone()[0]
+
+            cursor.execute("SELECT COUNT(*) FROM processing_queue WHERE status = 'processing'")
+            processing = cursor.fetchone()[0]
+
+            cursor.execute("SELECT COUNT(*) FROM processing_queue WHERE status = 'completed'")
+            completed = cursor.fetchone()[0]
+
+            cursor.execute("SELECT COUNT(*) FROM processing_queue WHERE status = 'failed'")
+            failed = cursor.fetchone()[0]
+
+            lines.append("## Processing Queue")
+            lines.append(f"  Pending: {pending}")
+            lines.append(f"  Processing: {processing}")
+            lines.append(f"  Completed: {completed}")
+            lines.append(f"  Failed: {failed}")
+            lines.append("")
+
+            # Processor status
+            if self.cognitivefs and self.cognitivefs.processor:
+                proc_stats = self.cognitivefs.processor.get_stats()
+                lines.append("## Processor")
+                lines.append(f"  Running: {proc_stats.get('running', False)}")
+                lines.append(f"  Embedding available: {proc_stats.get('embedding_available', False)}")
+                lines.append("")
+
+        except Exception as e:
+            lines.append(f"Error getting index status: {e}")
+
+        return "\n".join(lines).encode('utf-8')
+
     # ==================== Query operations ====================
 
     def _getattr_query(self, target_path: str, parts: List[str]) -> Optional[Dict]:
@@ -497,13 +606,18 @@ List all queries:
             query_id = query[8:]
             return self._get_query_result(query_id)
 
+        # Check if this is a debug request (shows context used)
+        if query.startswith("debug/"):
+            query_id = query[6:]
+            return self._get_query_debug(query_id)
+
         # Check if listing pending queries
         if query == "pending":
             return self._list_pending_queries()
 
         # Queue new query
         query_id = self._queue_async_query(query)
-        return f"Query queued with ID: {query_id}\n\nCheck results:\n  cat /.ai/query/results/{query_id}\n\nList pending:\n  cat /.ai/query/pending\n"
+        return f"Query queued with ID: {query_id}\n\nCheck results:\n  cat /.ai/query/results/{query_id}\n\nView context used:\n  cat /.ai/query/debug/{query_id}\n\nList pending:\n  cat /.ai/query/pending\n"
 
     def _queue_async_query(self, query: str) -> str:
         """Queue a query for async processing."""
@@ -535,12 +649,20 @@ List all queries:
             from .llm import get_query_engine
 
             engine = get_query_engine(self.knowledge_graph)
-            result = engine.query(query)
+            # Use query_with_context for full transparency
+            result_data = engine.query_with_context(query)
 
             with self._query_lock:
                 if query_id in self._query_results:
                     self._query_results[query_id]['status'] = 'complete'
-                    self._query_results[query_id]['result'] = result
+                    self._query_results[query_id]['result'] = result_data.get('formatted_response', '')
+                    # Store full context for debug endpoint
+                    self._query_results[query_id]['context'] = {
+                        'files_used': result_data.get('files_used', []),
+                        'entities_used': result_data.get('entities_used', []),
+                        'relationships_used': result_data.get('relationships_used', []),
+                        'llm_available': result_data.get('llm_available', False)
+                    }
 
         except Exception as e:
             with self._query_lock:
@@ -564,6 +686,67 @@ List all queries:
                 return info['result']
             else:
                 return info['result']
+
+    def _get_query_debug(self, query_id: str) -> str:
+        """Get debug info showing context used for a query."""
+        with self._query_lock:
+            if query_id not in self._query_results:
+                return f"Query ID not found: {query_id}\n"
+
+            info = self._query_results[query_id]
+            status = info['status']
+            query = info['query']
+
+            if status == 'pending':
+                return f"Query '{query}' is still processing...\n\nTry again in a few seconds.\n"
+
+            lines = [
+                f"# Query Debug: {query_id}",
+                f"Question: {query}",
+                f"Status: {status}",
+                ""
+            ]
+
+            context = info.get('context', {})
+
+            # Files used
+            files_used = context.get('files_used', [])
+            lines.append(f"## Files Used ({len(files_used)})")
+            if files_used:
+                for f in files_used:
+                    sim = f.get('similarity', 0)
+                    lines.append(f"  - {f['path']} (similarity: {sim:.3f})")
+            else:
+                lines.append("  (none)")
+            lines.append("")
+
+            # Entities used
+            entities_used = context.get('entities_used', [])
+            lines.append(f"## Entities Used ({len(entities_used)})")
+            if entities_used:
+                for e in entities_used:
+                    lines.append(f"  - {e['name']} ({e['type']}, {e['refs']} refs) [source: {e['source']}]")
+            else:
+                lines.append("  (none)")
+            lines.append("")
+
+            # Relationships used
+            relationships_used = context.get('relationships_used', [])
+            lines.append(f"## Relationships Used ({len(relationships_used)})")
+            if relationships_used:
+                for r in relationships_used:
+                    lines.append(f"  - {r['source']} → {r['relation']} → {r['target']}")
+            else:
+                lines.append("  (none)")
+            lines.append("")
+
+            # LLM status
+            llm_available = context.get('llm_available', False)
+            lines.append(f"## LLM Status")
+            lines.append(f"  Available: {llm_available}")
+            lines.append("")
+
+            return "\n".join(lines)
 
     def _list_pending_queries(self) -> str:
         """List all pending/completed queries."""
@@ -1883,16 +2066,18 @@ Get all connections for one entity:
         if not target_path:
             return b""
 
-        if target_path == "_help.txt":
+        # Handle help file
+        stripped = target_path.lstrip("/")
+        if stripped == "_help.txt":
             return self._get_search_help()
 
-        # Convert path to search query (strip leading /)
-        query = target_path.lstrip("/").replace("_", " ").replace("-", " ").replace("+", " ")
+        # Convert path to search query
+        query = stripped.replace("_", " ").replace("-", " ").replace("+", " ")
         return self._execute_search(query)
 
     def _get_search_help(self) -> bytes:
         """Return help for search."""
-        return b"""# Full-Text Search with Content Snippets
+        return b"""# Full-Text Search with Entities
 
 ## Usage
 
@@ -1902,18 +2087,22 @@ Search for terms (use _ or + for spaces):
 
 ## Returns
 
+- Matching entities (people, organizations, concepts)
 - Matching files with relevance scores
 - Content snippets showing where matches occur
-- Context around each match
 
 ## Example
 
     cat /.ai/search/neural_networks
 
 Output:
-    === /ai_research.txt (score: 2.5) ===
-    ...Machine learning and NEURAL NETWORKS are transforming...
-    ...Deep learning models can recognize patterns...
+    ## Entities (3)
+      - Neural Networks (concept, 12 refs)
+      - Deep Learning (concept, 8 refs)
+
+    ## Files (2)
+      === /ai_research.txt (relevance: 2.5) ===
+        ...Machine learning and NEURAL NETWORKS are transforming...
 """
 
     def _execute_search(self, query: str) -> bytes:
@@ -1949,37 +2138,71 @@ Output:
             """, (like_pattern, like_pattern))
             results = cursor.fetchall()
 
-        if not results:
+        # Also search for matching entities
+        entity_results = self._search_entities(query, cursor)
+
+        if not results and not entity_results:
             return f"No results found for: {query}\n".encode('utf-8')
 
         # Format results with snippets
         lines = [
             f"# Search results for: {query}",
-            f"# Found {len(results)} matching files",
             ""
         ]
 
-        for row in results:
-            path = row['path']
-            text = row['extracted_text'] or ""
-            summary = row['summary'] or ""
-            score = abs(row['score']) if row['score'] else 0
-
-            lines.append(f"═══ {path} (relevance: {score:.1f}) ═══")
-
-            # Find and show snippets containing the query terms
-            snippets = self._extract_snippets(text, query, max_snippets=3)
-            if snippets:
-                for snippet in snippets:
-                    lines.append(f"  ...{snippet}...")
-            elif summary:
-                lines.append(f"  Summary: {summary[:200]}")
-            elif text:
-                lines.append(f"  {text[:200]}...")
-
+        # Show matching entities first
+        if entity_results:
+            lines.append(f"## Entities ({len(entity_results)})")
+            for entity in entity_results:
+                name = entity['name']
+                etype = entity['type']
+                refs = entity['ref_count']
+                lines.append(f"  - {name} ({etype}, {refs} refs)")
             lines.append("")
 
+        # Show matching files
+        if results:
+            lines.append(f"## Files ({len(results)})")
+            for row in results:
+                path = row['path']
+                text = row['extracted_text'] or ""
+                summary = row['summary'] or ""
+                score = abs(row['score']) if row['score'] else 0
+
+                lines.append(f"  ═══ {path} (relevance: {score:.1f}) ═══")
+
+                # Find and show snippets containing the query terms
+                snippets = self._extract_snippets(text, query, max_snippets=3)
+                if snippets:
+                    for snippet in snippets:
+                        lines.append(f"    ...{snippet}...")
+                elif summary:
+                    lines.append(f"    Summary: {summary[:200]}")
+                elif text:
+                    lines.append(f"    {text[:200]}...")
+
+                lines.append("")
+
         return "\n".join(lines).encode('utf-8')
+
+    def _search_entities(self, query: str, cursor) -> List[Dict]:
+        """Search for entities matching the query."""
+        # Search entity names that contain the query
+        like_pattern = f"%{query}%"
+        try:
+            cursor.execute("""
+                SELECT e.name, e.type, COUNT(fe.file_id) as ref_count
+                FROM entities e
+                LEFT JOIN file_entities fe ON e.id = fe.entity_id
+                WHERE e.name LIKE ?
+                GROUP BY e.id
+                ORDER BY ref_count DESC
+                LIMIT 10
+            """, (like_pattern,))
+            return [{'name': row['name'], 'type': row['type'], 'ref_count': row['ref_count']}
+                    for row in cursor.fetchall()]
+        except Exception:
+            return []
 
     def _extract_snippets(self, text: str, query: str, max_snippets: int = 3,
                           context_chars: int = 80) -> List[str]:

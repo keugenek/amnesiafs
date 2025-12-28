@@ -75,8 +75,15 @@ class TestVirtualAIHandler(unittest.TestCase):
         self.assertTrue(stat.S_ISDIR(attrs['st_mode']))
 
     def test_getattr_status(self):
-        """Test getattr for status file."""
+        """Test getattr for status directory."""
         attrs = self.handler.getattr("/.ai/status")
+        self.assertIsNotNone(attrs)
+        import stat
+        self.assertTrue(stat.S_ISDIR(attrs['st_mode']))
+
+    def test_getattr_status_index(self):
+        """Test getattr for status/index file."""
+        attrs = self.handler.getattr("/.ai/status/index")
         self.assertIsNotNone(attrs)
         import stat
         self.assertTrue(stat.S_ISREG(attrs['st_mode']))
@@ -124,6 +131,14 @@ class TestVirtualAIStatus(unittest.TestCase):
         data = json.loads(content.decode('utf-8'))
         self.assertIn('filesystem', data)
         self.assertEqual(data['filesystem'], 'CognitiveFS')
+
+    def test_status_index_content(self):
+        """Test status/index returns markdown."""
+        content = self.handler.read("/.ai/status/index", 10000, 0)
+        self.assertIsInstance(content, bytes)
+        text = content.decode('utf-8')
+        self.assertIn('# Index Status', text)
+        self.assertIn('Knowledge graph not initialized', text)
 
 
 class TestVirtualAIQuery(unittest.TestCase):
@@ -196,6 +211,30 @@ class TestAsyncQuerySystem(unittest.TestCase):
 
         with self.handler._query_lock:
             self.assertGreater(len(self.handler._query_results), 0)
+
+
+class TestVirtualAISearch(unittest.TestCase):
+    """Test search endpoint."""
+
+    def setUp(self):
+        self.handler = VirtualAIHandler()
+
+    def test_search_help(self):
+        """Test search help content."""
+        content = self.handler.read("/.ai/search/_help.txt", 10000, 0)
+        self.assertIsInstance(content, bytes)
+        self.assertIn(b"Search", content)
+
+    def test_search_without_kg(self):
+        """Test search without knowledge graph."""
+        content = self.handler.read("/.ai/search/test+query", 10000, 0)
+        self.assertIsInstance(content, bytes)
+        self.assertIn(b"Knowledge graph not initialized", content)
+
+    def test_search_entities_method(self):
+        """Test _search_entities returns empty list without KG."""
+        result = self.handler._search_entities("test", None)
+        self.assertEqual(result, [])
 
 
 if __name__ == '__main__':
