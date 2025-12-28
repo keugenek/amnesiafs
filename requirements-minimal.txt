@@ -1,0 +1,19 @@
+# Minimal requirements for Docker testing (no CUDA)
+fusepy>=3.0.1
+
+# Database
+sqlalchemy>=2.0.0
+lz4>=4.3.0
+
+# Knowledge graph (lightweight)
+networkx>=3.0
+
+# NumPy only - skip sentence-transformers to avoid 1GB torch download
+numpy>=1.24.0
+
+# CLI
+rich>=13.0.0
+
+# Utilities
+pyyaml>=6.0
+psutil>=5.9.0
