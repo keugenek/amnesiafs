@@ -459,9 +459,15 @@ class VirtualAIHandler:
             last_indexed_path = recent[0] if recent else "N/A"
             last_indexed_time = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(recent[1])) if recent else "N/A"
 
+            # Calculate embedding coverage (BUG-004 fix)
+            files_without_embeddings = total_files - files_with_embeddings
+            coverage = (files_with_embeddings / total_files * 100) if total_files else 0
+
             lines.append("## Files")
             lines.append(f"  Total indexed: {total_files}")
             lines.append(f"  With embeddings: {files_with_embeddings}")
+            lines.append(f"  Without embeddings: {files_without_embeddings}")
+            lines.append(f"  Embedding coverage: {coverage:.1f}%")
             lines.append(f"  With extracted text: {files_with_text}")
             lines.append(f"  Last indexed: {last_indexed_path}")
             lines.append(f"  Last indexed at: {last_indexed_time}")
@@ -677,6 +683,12 @@ List all queries:
                 return f"Query ID not found: {query_id}\n"
 
             info = self._query_results[query_id]
+
+            # Expire old results after 24 hours (BUG-002 fix)
+            if time.time() - info.get('timestamp', 0) > 86400:
+                del self._query_results[query_id]
+                return f"Query {query_id} expired. Please rerun your query.\n"
+
             status = info['status']
             query = info['query']
 
@@ -1528,14 +1540,18 @@ List all queries:
         return None
 
     def _readdir_graph(self, target_path: str) -> List[str]:
-        """List graph query endpoints."""
+        """List graph query endpoints (BUG-006 fix)."""
         if not target_path:
             return ["entities", "relationships", "stats", "connections", "context", "query", "_help.txt"]
 
         parts = target_path.strip('/').split('/')
         if len(parts) == 1:
             subdir = parts[0]
-            if subdir == "connections":
+            if subdir == "entities":
+                # List entity types for browsing
+                from .knowledge_graph import EntityType
+                return ["page", "_help.txt"] + [et.value for et in EntityType]
+            elif subdir == "connections":
                 return ["_help.txt"]
             elif subdir == "context":
                 return ["_help.txt"]
@@ -2434,7 +2450,7 @@ Find files similar to an existing file:
     # ==================== Entities (file entity view) operations ====================
 
     def _getattr_entities(self, target_path: str, parts: List[str]) -> Optional[Dict]:
-        """Get attributes for entities paths (show entities extracted from a file)."""
+        """Get attributes for entities paths (BUG-005 fix)."""
         now = int(time.time())
 
         # /.ai/entities/ - directory listing
@@ -2445,13 +2461,37 @@ Find files similar to an existing file:
         if target_path.endswith('.tmp') or target_path.startswith('~'):
             return None
 
-        # /.ai/entities/<filepath> - return a placeholder size
+        # /.ai/entities/<type>/ - entity type directory
+        path_parts = target_path.strip('/').split('/')
+        if len(path_parts) == 1:
+            from .knowledge_graph import EntityType
+            try:
+                EntityType(path_parts[0])
+                return self._make_dir_stat(now)
+            except ValueError:
+                pass  # Not an entity type, might be a file path
+
+        # /.ai/entities/<type>/<entity_name> or /.ai/entities/<filepath>
         return self._make_file_stat(4096, now)
 
     def _readdir_entities(self, target_path: str) -> List[str]:
-        """Read directory for entities view."""
+        """Read directory for entities view (BUG-005 fix)."""
         if not target_path:
-            return ["_help.txt"]
+            # List entity types + help
+            from .knowledge_graph import EntityType
+            return ["_help.txt"] + [et.value for et in EntityType]
+
+        # List entities of a given type
+        parts = target_path.strip('/').split('/')
+        if len(parts) == 1 and self.knowledge_graph:
+            try:
+                from .knowledge_graph import EntityType
+                entity_type = EntityType(parts[0])
+                entities = self.knowledge_graph.get_entities_by_type(entity_type, limit=100)
+                return [e.name.replace(' ', '_').replace('/', '-') for e in entities]
+            except ValueError:
+                pass  # Invalid entity type
+
         return []
 
     def _read_entities(self, target_path: str, parts: List[str]) -> bytes:

@@ -161,6 +161,9 @@ class BackgroundProcessor:
                 # Check database queue for pending operations
                 self._process_database_queue()
 
+                # Retry files missing embeddings (BUG-013 fix)
+                self._retry_missing_embeddings()
+
             except Exception as e:
                 logger.error(f"Error in worker loop: {e}", exc_info=True)
                 time.sleep(self.poll_interval)
@@ -342,6 +345,26 @@ class BackgroundProcessor:
             except Exception as e:
                 logger.error(f"Failed to process queue item {queue_id}: {e}")
                 self.kg.mark_operation_failed(queue_id, str(e))
+
+    def _retry_missing_embeddings(self):
+        """Retry embedding generation for files that were skipped (BUG-013 fix)."""
+        if not self.embedding_generator.is_available:
+            return
+
+        cursor = self.kg.conn.cursor()
+        cursor.execute("""
+            SELECT id, extracted_text FROM files
+            WHERE embedding_id IS NULL
+            AND extracted_text IS NOT NULL
+            AND extracted_text != ''
+            LIMIT 5
+        """)
+
+        for row in cursor.fetchall():
+            file_id = row['id']
+            text = row['extracted_text']
+            logger.debug(f"Retrying embedding for file_id={file_id}")
+            self._generate_embedding(file_id, text)
 
     def get_stats(self) -> dict:
         """Get processor statistics."""

@@ -401,6 +401,13 @@ class KnowledgeGraph:
             )
             self.conn.commit()
 
+        # Ensure unique index on embeddings (file_id, model) - fixes BUG-014
+        cursor.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_emb_file_model
+            ON embeddings(file_id, model) WHERE file_id IS NOT NULL
+        """)
+        self.conn.commit()
+
     # ==================== File Operations ====================
 
     def add_file(self, file: FileRecord) -> int:
@@ -704,7 +711,7 @@ class KnowledgeGraph:
     # ==================== Embedding Operations ====================
 
     def add_embedding(self, embedding: Embedding) -> int:
-        """Add an embedding vector."""
+        """Add or update an embedding vector."""
         cursor = self.conn.cursor()
         now = time.time()
 
@@ -712,12 +719,26 @@ class KnowledgeGraph:
             INSERT INTO embeddings (entity_id, file_id, model, dimensions,
                                    vector, created_at)
             VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(file_id, model) DO UPDATE SET
+                vector = excluded.vector,
+                dimensions = excluded.dimensions,
+                created_at = excluded.created_at
         """, (
             embedding.entity_id, embedding.file_id, embedding.model,
             embedding.dimensions, embedding.vector, now
         ))
 
         self.conn.commit()
+
+        # Return the id (lastrowid is 0 on conflict, so query if needed)
+        if cursor.lastrowid == 0 and embedding.file_id:
+            cursor.execute(
+                "SELECT id FROM embeddings WHERE file_id = ? AND model = ?",
+                (embedding.file_id, embedding.model)
+            )
+            row = cursor.fetchone()
+            return row['id'] if row else 0
+
         return cursor.lastrowid
 
     def get_embedding(self, file_id: int = None, entity_id: int = None) -> Optional[Embedding]:
