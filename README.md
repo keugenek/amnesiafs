@@ -94,6 +94,10 @@ When mounted, browse `K:\.ai\` for AI-powered virtual directories:
 | `.ai/versions/` | Git history, diffs, file versions |
 | `.ai/graph/` | Knowledge graph queries, entity connections |
 | `.ai/by-topic/` | Files organized by semantic topic clusters |
+| `.ai/summary/<file>` | AI-generated file summary |
+| `.ai/related/<file>` | Related files (by embedding + entities) |
+| `.ai/chat/<session>` | Interactive chat sessions |
+| `.ai/by-date/` | Files organized by modification date |
 
 **Example usage:**
 ```powershell
@@ -285,11 +289,10 @@ pip install sentence-transformers  # ~1GB download
 ## Roadmap
 
 ### Completed
-- ✅ Split `virtual_ai.py` into modular handlers (8 handlers: status, search, query, versions, entities, similar, graph, topic)
+- ✅ Split `virtual_ai.py` into modular handlers (12 handlers: status, search, query, versions, entities, similar, graph, topic, summary, related, chat, date)
 
 ### Next
 - Improve RAG quality (hybrid search, reranking)
-- Extract remaining handlers (summary, related, chat, by-date)
 
 ### Future
 - **Zero-config discovery**: `/.ai/insights/` with auto-clusters, duplicates, outliers, hubs

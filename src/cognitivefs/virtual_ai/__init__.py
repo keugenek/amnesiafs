@@ -16,6 +16,10 @@ from .similar import SimilarHandler
 from .query import QueryHandler
 from .graph import GraphHandler
 from .topic import TopicHandler
+from .summary import SummaryHandler
+from .related import RelatedHandler
+from .chat import ChatHandler
+from .date import DateHandler
 from ..generators import GeneratorFactory
 
 
@@ -38,11 +42,10 @@ class VirtualAIHandler:
         "versions": VirtualNodeType.DIRECTORY,
         "graph": VirtualNodeType.GRAPH,
         "by-topic": VirtualNodeType.DIRECTORY,
-        # TODO: Re-enable when handlers are extracted
-        # "summary": VirtualNodeType.SUMMARY,
-        # "related": VirtualNodeType.RELATED,
-        # "chat": VirtualNodeType.CHAT,
-        # "by-date": VirtualNodeType.DIRECTORY,
+        "summary": VirtualNodeType.SUMMARY,
+        "related": VirtualNodeType.RELATED,
+        "chat": VirtualNodeType.CHAT,
+        "by-date": VirtualNodeType.DIRECTORY,
     }
 
     # Auto-generated dual-view files
@@ -62,6 +65,10 @@ class VirtualAIHandler:
         self.query = QueryHandler(cognitivefs, None)
         self.graph = GraphHandler(cognitivefs, None)
         self.topic = TopicHandler(cognitivefs, None)
+        self.summary = SummaryHandler(cognitivefs, None)
+        self.related = RelatedHandler(cognitivefs, None)
+        self.chat = ChatHandler(cognitivefs, None)
+        self.date = DateHandler(cognitivefs, None)
 
         # Generator factory for dual-view files
         self._generator_factory = GeneratorFactory(None)
@@ -77,6 +84,10 @@ class VirtualAIHandler:
         self.query.knowledge_graph = kg
         self.graph.knowledge_graph = kg
         self.topic.knowledge_graph = kg
+        self.summary.knowledge_graph = kg
+        self.related.knowledge_graph = kg
+        self.chat.knowledge_graph = kg
+        self.date.knowledge_graph = kg
         self._generator_factory.kg = kg
 
     def is_ai_path(self, path: str) -> bool:
@@ -124,6 +135,14 @@ class VirtualAIHandler:
             return self.graph.getattr(target_path, parts)
         elif subdir == "by-topic":
             return self.topic.getattr(target_path, parts)
+        elif subdir == "summary":
+            return self.summary.getattr(target_path, parts)
+        elif subdir == "related":
+            return self.related.getattr(target_path, parts)
+        elif subdir == "chat":
+            return self.chat.getattr(target_path, parts)
+        elif subdir == "by-date":
+            return self.date.getattr(target_path, parts)
 
         return None
 
@@ -154,6 +173,14 @@ class VirtualAIHandler:
             entries = self.graph.readdir(target_path, parts)
         elif subdir == "by-topic":
             entries = self.topic.readdir(target_path, parts)
+        elif subdir == "summary":
+            entries = self.summary.readdir(target_path, parts)
+        elif subdir == "related":
+            entries = self.related.readdir(target_path, parts)
+        elif subdir == "chat":
+            entries = self.chat.readdir(target_path, parts)
+        elif subdir == "by-date":
+            entries = self.date.readdir(target_path, parts)
 
         # Add generated dual-view files to first-level subdirectories
         if subdir in self.SUBDIRS and not target_path:
@@ -191,6 +218,14 @@ class VirtualAIHandler:
             content = self.graph.read(target_path, parts)
         elif subdir == "by-topic":
             content = self.topic.read(target_path, parts)
+        elif subdir == "summary":
+            content = self.summary.read(target_path, parts)
+        elif subdir == "related":
+            content = self.related.read(target_path, parts)
+        elif subdir == "chat":
+            content = self.chat.read(target_path, parts)
+        elif subdir == "by-date":
+            content = self.date.read(target_path, parts)
 
         return content[offset:offset + size]
 
