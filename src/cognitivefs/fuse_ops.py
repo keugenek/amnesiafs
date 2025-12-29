@@ -225,8 +225,8 @@ class CognitiveFS(Operations):
         self.knowledge_graph = KnowledgeGraph(kg_path)
         self.knowledge_graph.open()
 
-        # Connect to virtual AI handler
-        self.virtual_ai.knowledge_graph = self.knowledge_graph
+        # Connect to virtual AI handler (also initializes generators)
+        self.virtual_ai.set_knowledge_graph(self.knowledge_graph)
 
         # Initialize background processor for knowledge extraction
         self._init_processor()

@@ -24,6 +24,9 @@ from typing import Optional, Dict, List, Any, Tuple
 from dataclasses import dataclass, field
 from enum import Enum
 
+# Import generators for dual-view files
+from .generators import GeneratorFactory
+
 
 class VirtualNodeType(Enum):
     """Types of virtual nodes in /.ai/"""
@@ -74,6 +77,9 @@ class VirtualAIHandler:
         "graph": VirtualNodeType.GRAPH,
     }
 
+    # Auto-generated dual-view files that appear in every virtual folder
+    GENERATED_FILES = ['_DASHBOARD.html', '_manifest.md', '_index.json']
+
     def __init__(self, cognitivefs: 'CognitiveFS' = None):
         """
         Initialize virtual AI handler.
@@ -100,6 +106,14 @@ class VirtualAIHandler:
         # Cache for generated content
         self._content_cache: Dict[str, Tuple[bytes, float]] = {}  # path -> (content, timestamp)
         self._cache_ttl = 60.0  # Cache TTL in seconds
+
+        # Generator factory for dual-view files (_DASHBOARD.html, _manifest.md, _index.json)
+        self._generator_factory = GeneratorFactory(None)  # KG will be set later
+
+    def set_knowledge_graph(self, kg):
+        """Set the knowledge graph reference for generators."""
+        self.knowledge_graph = kg
+        self._generator_factory.kg = kg
 
     def is_ai_path(self, path: str) -> bool:
         """Check if path is under /.ai/"""
@@ -152,6 +166,13 @@ class VirtualAIHandler:
                            VirtualNodeType.CHAT, VirtualNodeType.GRAPH):
                 return self._make_dir_stat(now)
 
+        # Check for generated dual-view files in any subdir
+        filename = parts[-1] if parts else None
+        if filename in self.GENERATED_FILES and subdir in self.SUBDIRS:
+            virtual_path = f"/.ai/{subdir}"
+            content = self._generator_factory.get_cached_or_generate(virtual_path, filename)
+            return self._make_file_stat(len(content), now)
+
         # Handle specific virtual paths
         if subdir == "query":
             return self._getattr_query(target_path, parts)
@@ -193,31 +214,37 @@ class VirtualAIHandler:
         if path == self.AI_ROOT or path == self.AI_ROOT + "/":
             return list(self.SUBDIRS.keys())
 
+        entries = []
+
         # Handle specific virtual directories
         if subdir == "query":
-            return self._readdir_query(target_path)
+            entries = self._readdir_query(target_path)
         elif subdir == "chat":
-            return self._readdir_chat(target_path)
+            entries = self._readdir_chat(target_path)
         elif subdir == "by-topic":
-            return self._readdir_by_topic(target_path)
+            entries = self._readdir_by_topic(target_path)
         elif subdir == "by-date":
-            return self._readdir_by_date(target_path)
+            entries = self._readdir_by_date(target_path)
         elif subdir == "graph":
-            return self._readdir_graph(target_path)
+            entries = self._readdir_graph(target_path)
         elif subdir == "search":
-            return self._readdir_search(target_path)
+            entries = self._readdir_search(target_path)
         elif subdir == "similar":
-            return self._readdir_similar(target_path)
+            entries = self._readdir_similar(target_path)
         elif subdir == "entities":
-            return self._readdir_entities(target_path)
+            entries = self._readdir_entities(target_path)
         elif subdir in ("summary", "related"):
             # These mirror the real filesystem structure
-            return self._readdir_mirror(target_path)
+            entries = self._readdir_mirror(target_path)
         elif subdir == "status":
             # List available status endpoints
-            return ["index", "overview"]
+            entries = ["index", "overview"]
 
-        return []
+        # Add generated dual-view files to first-level subdirectories
+        if subdir in self.SUBDIRS and not target_path:
+            entries = list(entries) + self.GENERATED_FILES
+
+        return entries
 
     def read(self, path: str, size: int, offset: int) -> bytes:
         """
@@ -229,6 +256,13 @@ class VirtualAIHandler:
         subdir, target_path, parts = self.parse_ai_path(path)
 
         content = b""
+
+        # Check for generated dual-view files first
+        filename = parts[-1] if parts else None
+        if filename in self.GENERATED_FILES and subdir in self.SUBDIRS:
+            virtual_path = f"/.ai/{subdir}"
+            content = self._generator_factory.get_cached_or_generate(virtual_path, filename)
+            return content[offset:offset + size]
 
         if subdir == "status":
             content = self._read_status(target_path, parts)
