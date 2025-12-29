@@ -11,6 +11,8 @@ import errno
 import stat
 import time
 import struct
+import signal
+import threading
 from typing import Optional, List, Dict, Tuple
 from pathlib import Path
 
@@ -43,6 +45,7 @@ from .diskformat import Superblock, Inode, InodeType, InodeFlags, AllocationBitm
 from .virtual_ai import VirtualAIHandler
 from .version_control import GitVersionControl
 from .knowledge_graph import KnowledgeGraph, FileRecord, Entity, EntityType
+from .sync import SyncManager, CONFIG_FILENAME, generate_default_config_content
 
 
 # Directory entry format: inode_num (8 bytes) + name_len (2 bytes) + name (variable)
@@ -155,6 +158,14 @@ class CognitiveFS(Operations):
         # Git-based version control
         self.version_control: Optional[GitVersionControl] = None
 
+        # Sync manager for automatic git sync
+        self.sync_manager: Optional[SyncManager] = None
+
+        # Auto-save thread for periodic flush
+        self._autosave_thread: Optional[threading.Thread] = None
+        self._autosave_stop = threading.Event()
+        self._autosave_interval = 30  # seconds
+
     def init(self, path):
         """Initialize filesystem on mount."""
         # Note: 'path' from FUSE is "/" not the actual mount point
@@ -201,11 +212,84 @@ class CognitiveFS(Operations):
         # Initialize version control
         self._init_version_control()
 
+        # Initialize sync manager
+        self._init_sync_manager()
+
+        # Start auto-save thread
+        self._start_autosave()
+
+        # Setup signal handlers for graceful shutdown
+        self._setup_signal_handlers()
+
         self._log(f"Filesystem mounted successfully (UUID: {self.superblock.uuid.hex()})")
+
+
+    def _start_autosave(self):
+        """Start periodic auto-save thread."""
+        if self._autosave_thread is not None:
+            return
+        self._autosave_stop.clear()
+        self._autosave_thread = threading.Thread(target=self._autosave_loop, daemon=True)
+        self._autosave_thread.start()
+        self._log(f"Auto-save started (interval: {self._autosave_interval}s)")
+
+    def _stop_autosave(self):
+        """Stop auto-save thread."""
+        if self._autosave_thread is None:
+            return
+        self._autosave_stop.set()
+        self._autosave_thread.join(timeout=5)
+        self._autosave_thread = None
+        self._log("Auto-save stopped")
+
+    def _autosave_loop(self):
+        """Periodic auto-save loop."""
+        while not self._autosave_stop.wait(self._autosave_interval):
+            try:
+                if self.device:
+                    self._flush_all()
+                    self.device.sync()
+                    self._log("Auto-save: flushed to disk")
+            except Exception as e:
+                self._log(f"Auto-save error: {e}")
+
+    def _setup_signal_handlers(self):
+        """Setup signal handlers for graceful shutdown."""
+        def signal_handler(signum, frame):
+            self._log(f"Received signal {signum}, initiating graceful shutdown...")
+            # Trigger destroy via FUSE unmount
+            try:
+                if sys.platform == 'win32':
+                    # On Windows, we just do cleanup directly
+                    self.destroy('/')
+                else:
+                    import subprocess
+                    subprocess.run(['fusermount', '-u', self.mount_point], timeout=5)
+            except Exception as e:
+                self._log(f"Signal handler cleanup error: {e}")
+                # Force cleanup
+                self.destroy('/')
+
+        # Register handlers (SIGTERM, SIGINT)
+        try:
+            signal.signal(signal.SIGTERM, signal_handler)
+            signal.signal(signal.SIGINT, signal_handler)
+            self._log("Signal handlers registered (SIGTERM, SIGINT)")
+        except Exception as e:
+            self._log(f"Could not register signal handlers: {e}")
 
     def destroy(self, path):
         """Cleanup on unmount."""
         self._log("Unmounting CognitiveFS")
+
+        # Stop auto-save thread first
+        self._stop_autosave()
+
+        # Stop sync manager first (may trigger final sync)
+        if self.sync_manager:
+            self._log("Stopping sync manager")
+            self.sync_manager.stop()
+            self.sync_manager = None
 
         # Commit any pending version control changes
         if self.version_control and self.version_control.enabled:
@@ -274,6 +358,74 @@ class CognitiveFS(Operations):
 
         if self.version_control.enabled and not self.version_control.has_commits():
             self.version_control.commit_pending("Initial snapshot")
+
+    def _init_sync_manager(self):
+        """Initialize the sync manager for automatic git sync.
+
+        The sync manager reads config from /.cognitivefs.yaml on the volume
+        and syncs using the external VCS repo (which mirrors volume content).
+        """
+        if not self.version_control:
+            self._log("Sync manager: Version control not available")
+            return
+
+        def config_reader() -> bytes:
+            """Read config file from filesystem root."""
+            try:
+                inode = self._resolve_path('/' + CONFIG_FILENAME)
+                if inode:
+                    return self._read_file_data(inode)
+            except Exception:
+                pass
+            return None
+
+        self.sync_manager = SyncManager(
+            vcs_repo_path=self.version_control.repo_path,
+            config_reader=config_reader,
+            logger=self._log,
+        )
+        self.sync_manager.start()
+        self._log("Sync manager started")
+
+    def _create_file(self, path: str, data: bytes):
+        """Create a new file with given data (helper for sync config)."""
+        # Parse path
+        dirname = os.path.dirname(path)
+        filename = os.path.basename(path)
+
+        # Get parent directory inode
+        if dirname == '/' or dirname == '':
+            parent_inode_num = self.ROOT_INODE
+        else:
+            parent_inode_num = self._resolve_path(dirname)
+            if not parent_inode_num:
+                raise FuseOSError(errno.ENOENT)
+
+        # Allocate inode for new file
+        new_inode_num = self._alloc_inode()
+        if not new_inode_num:
+            raise FuseOSError(errno.ENOSPC)
+
+        # Create inode
+        now = int(time.time())
+        new_inode = Inode(
+            inode_num=new_inode_num,
+            inode_type=InodeType.FILE,
+            mode=0o644,
+            uid=os.getuid() if hasattr(os, 'getuid') else 0,
+            gid=os.getgid() if hasattr(os, 'getgid') else 0,
+            size=len(data),
+            created_at=now,
+            modified_at=now,
+            accessed_at=now,
+        )
+
+        # Write data
+        self._write_file_data_to_inode(new_inode, data)
+        self._write_inode(new_inode)
+
+        # Add to parent directory
+        self._add_dir_entry(parent_inode_num, DirectoryEntry(new_inode_num, filename))
 
     def _init_processor(self):
         """Initialize the background processor for knowledge extraction."""

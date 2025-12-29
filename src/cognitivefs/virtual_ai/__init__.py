@@ -20,6 +20,7 @@ from .summary import SummaryHandler
 from .related import RelatedHandler
 from .chat import ChatHandler
 from .date import DateHandler
+from .insights import InsightsHandler
 from ..generators import GeneratorFactory
 
 
@@ -46,6 +47,7 @@ class VirtualAIHandler:
         "related": VirtualNodeType.RELATED,
         "chat": VirtualNodeType.CHAT,
         "by-date": VirtualNodeType.DIRECTORY,
+        "insights": VirtualNodeType.DIRECTORY,
     }
 
     # Auto-generated dual-view files
@@ -69,6 +71,7 @@ class VirtualAIHandler:
         self.related = RelatedHandler(cognitivefs, None)
         self.chat = ChatHandler(cognitivefs, None)
         self.date = DateHandler(cognitivefs, None)
+        self.insights = InsightsHandler(cognitivefs, None)
 
         # Generator factory for dual-view files
         self._generator_factory = GeneratorFactory(None)
@@ -88,6 +91,7 @@ class VirtualAIHandler:
         self.related.knowledge_graph = kg
         self.chat.knowledge_graph = kg
         self.date.knowledge_graph = kg
+        self.insights.knowledge_graph = kg
         self._generator_factory.kg = kg
 
     def is_ai_path(self, path: str) -> bool:
@@ -143,6 +147,8 @@ class VirtualAIHandler:
             return self.chat.getattr(target_path, parts)
         elif subdir == "by-date":
             return self.date.getattr(target_path, parts)
+        elif subdir == "insights":
+            return self.insights.getattr(target_path, parts)
 
         return None
 
@@ -181,6 +187,8 @@ class VirtualAIHandler:
             entries = self.chat.readdir(target_path, parts)
         elif subdir == "by-date":
             entries = self.date.readdir(target_path, parts)
+        elif subdir == "insights":
+            entries = self.insights.readdir(target_path, parts)
 
         # Add generated dual-view files to first-level subdirectories
         if subdir in self.SUBDIRS and not target_path:
@@ -226,6 +234,8 @@ class VirtualAIHandler:
             content = self.chat.read(target_path, parts)
         elif subdir == "by-date":
             content = self.date.read(target_path, parts)
+        elif subdir == "insights":
+            content = self.insights.read(target_path, parts)
 
         return content[offset:offset + size]
 

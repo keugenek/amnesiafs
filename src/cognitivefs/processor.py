@@ -68,6 +68,7 @@ IGNORED_DIRECTORIES: Set[str] = {
 
 # File patterns to ignore (compiled, temp, lock files)
 IGNORED_FILE_PATTERNS: Set[str] = {
+    r'\.cognitivefs\.yaml$',  # Config file - never index
     r'\.pyc$',
     r'\.pyo$',
     r'\.class$',
@@ -348,13 +349,17 @@ class BackgroundProcessor:
 
             # Link file to entity
             if entity_id:
-                self.kg.link_file_entity(
-                    file_id=file_id,
-                    entity_id=entity_id,
-                    relation_type='contains',
-                    confidence=extracted.confidence,
-                    context=extracted.context[:200]  # Limit context
-                )
+                try:
+                    self.kg.link_file_entity(
+                        file_id=file_id,
+                        entity_id=entity_id,
+                        relation_type='contains',
+                        confidence=extracted.confidence,
+                        context=extracted.context[:200]  # Limit context
+                    )
+                except Exception as e:
+                    # FK constraint can fail if entity was deleted between add and link
+                    logger.debug(f"Failed to link entity {entity_id} to file {file_id}: {e}")
 
     def _detect_relationships(self, file_id: int) -> int:
         """

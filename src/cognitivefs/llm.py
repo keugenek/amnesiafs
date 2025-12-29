@@ -18,6 +18,34 @@ logger = logging.getLogger(__name__)
 OLLAMA_BASE_URL = "http://localhost:11434"
 DEFAULT_MODEL = "qwen2.5:3b"
 
+# Global config storage (loaded from filesystem)
+_llm_config: Dict[str, Any] = {}
+
+
+def load_llm_config(config_path: str = None) -> Dict[str, Any]:
+    """Load LLM config from filesystem config file."""
+    global _llm_config
+    if _llm_config:
+        return _llm_config
+    try:
+        import yaml
+        import os
+        for drive in ['Z:', 'Y:', 'X:']:
+            for path in [f"{drive}/.cognitivefs.yaml", f"{drive}\.cognitivefs.yaml"]:
+                try:
+                    if os.path.exists(path):
+                        with open(path, 'r', encoding='utf-8') as f:
+                            config = yaml.safe_load(f)
+                            if config and 'llm' in config:
+                                _llm_config = config['llm']
+                                logger.info(f"Loaded LLM config: model={_llm_config.get('model')}")
+                                return _llm_config
+                except:
+                    continue
+        return {}
+    except:
+        return {}
+
 
 @dataclass
 class LLMResponse:
@@ -97,7 +125,7 @@ class OllamaClient:
                 method="POST"
             )
 
-            with urllib.request.urlopen(req, timeout=15) as resp:
+            with urllib.request.urlopen(req, timeout=60) as resp:
                 result = json.loads(resp.read().decode('utf-8'))
 
             return LLMResponse(
@@ -155,7 +183,7 @@ class OllamaClient:
                 method="POST"
             )
 
-            with urllib.request.urlopen(req, timeout=15) as resp:
+            with urllib.request.urlopen(req, timeout=60) as resp:
                 result = json.loads(resp.read().decode('utf-8'))
 
             message = result.get("message", {})
@@ -635,10 +663,15 @@ _summarizer = None
 
 
 def get_ollama_client() -> OllamaClient:
-    """Get or create Ollama client singleton."""
+    """Get or create Ollama client singleton with config from filesystem."""
     global _ollama_client
     if _ollama_client is None:
-        _ollama_client = OllamaClient()
+        config = load_llm_config()
+        base_url = config.get('base_url', OLLAMA_BASE_URL)
+        model = config.get('model', DEFAULT_MODEL)
+        _ollama_client = OllamaClient(base_url=base_url, model=model)
+        if config:
+            logger.info(f"OllamaClient initialized with model={model}")
     return _ollama_client
 
 
