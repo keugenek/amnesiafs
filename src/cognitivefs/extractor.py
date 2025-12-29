@@ -468,6 +468,26 @@ class EntityExtractor:
     (likely proper nouns), and code identifiers.
     """
 
+    # MIME types that are code/technical files (skip person/org extraction)
+    CODE_MIME_TYPES = {
+        # Programming languages
+        'text/x-python', 'text/javascript', 'text/typescript',
+        'text/x-go', 'text/x-rust', 'text/x-c', 'text/x-c++',
+        'text/x-java', 'text/x-ruby', 'text/x-php', 'text/x-csharp',
+        'text/x-kotlin', 'text/x-scala', 'text/x-swift', 'text/x-lua',
+        'text/x-perl', 'text/x-shellscript', 'text/x-powershell',
+        'text/x-fsharp', 'text/x-clojure', 'text/x-elixir',
+        'text/x-erlang', 'text/x-haskell', 'text/x-ocaml',
+        'text/x-nim', 'text/x-zig', 'text/x-v', 'text/x-d',
+        'text/x-sql', 'text/x-r',
+        # Config/data formats (title-case headers aren't people)
+        'application/json', 'text/yaml', 'text/x-yaml', 'application/x-yaml',
+        'text/x-toml', 'text/x-ini', 'text/xml', 'application/xml',
+        'text/csv', 'text/tab-separated-values',
+        # Technical documentation (headers aren't people)
+        'text/markdown', 'text/x-rst',
+    }
+
     # Regex patterns for entity extraction
     PATTERNS = {
         ExtractedEntityType.EMAIL: re.compile(
@@ -556,29 +576,58 @@ class EntityExtractor:
     def __init__(self):
         pass
 
-    def extract_entities(self, text: str) -> List[ExtractedEntity]:
+    def is_code_file(self, mime_type: str) -> bool:
+        """Check if MIME type indicates a code file."""
+        return mime_type in self.CODE_MIME_TYPES
+
+    def extract_entities(self, text: str, mime_type: str = "text/plain") -> List[ExtractedEntity]:
         """
         Extract all entities from text.
 
         Args:
             text: Input text to analyze
+            mime_type: MIME type of source file (affects extraction strategy)
 
         Returns:
             List of extracted entities
         """
         entities = []
+        is_code = self.is_code_file(mime_type)
+
+        # For code files, only extract URLs and emails (skip file paths - too noisy)
+        if is_code:
+            patterns_to_use = {
+                ExtractedEntityType.EMAIL: self.PATTERNS[ExtractedEntityType.EMAIL],
+                ExtractedEntityType.URL: self.PATTERNS[ExtractedEntityType.URL],
+            }
+        else:
+            patterns_to_use = self.PATTERNS
 
         # Extract using direct patterns
-        for entity_type, pattern in self.PATTERNS.items():
+        for entity_type, pattern in patterns_to_use.items():
             for match in pattern.finditer(text):
+                value = match.group()
+                # Skip file paths that are likely fragments or single words
+                if entity_type == ExtractedEntityType.FILE_PATH:
+                    # Skip if too short
+                    if len(value) < 5:
+                        continue
+                    # Skip if it's just /word (no path separators after initial)
+                    # Real paths have multiple components like /dir/file or C:\dir\file
+                    path_parts = value.replace('\\', '/').strip('/').split('/')
+                    if len(path_parts) < 2 and not value.startswith('.'):
+                        continue
+                    # Skip common markdown/text fragments
+                    if value.lower() in {'/limited', '/video', '/audio', '/image', '/etc'}:
+                        continue
                 entities.append(ExtractedEntity(
                     entity_type=entity_type,
-                    value=match.group(),
+                    value=value,
                     position=match.start(),
                     context=self._get_context(text, match.start(), match.end())
                 ))
 
-        # Extract dates
+        # Extract dates (useful for both code and docs)
         for pattern in self.DATE_PATTERNS:
             for match in pattern.finditer(text):
                 entities.append(ExtractedEntity(
@@ -588,34 +637,37 @@ class EntityExtractor:
                     context=self._get_context(text, match.start(), match.end())
                 ))
 
-        # Extract code identifiers
-        for entity_type, patterns in self.CODE_PATTERNS.items():
-            for pattern in patterns:
-                for match in pattern.finditer(text):
+        # Extract code identifiers (only for code files)
+        if is_code:
+            for entity_type, patterns in self.CODE_PATTERNS.items():
+                for pattern in patterns:
+                    for match in pattern.finditer(text):
+                        entities.append(ExtractedEntity(
+                            entity_type=entity_type,
+                            value=match.group(1),  # Capture group
+                            position=match.start(),
+                            context=self._get_context(text, match.start(), match.end())
+                        ))
+
+        # Extract proper nouns (potential persons/organizations)
+        # SKIP for code files - produces too much garbage from code identifiers
+        if not is_code:
+            for match in self.PROPER_NOUN_PATTERN.finditer(text):
+                value = match.group()
+                # Filter out common phrases
+                words = value.split()
+                if words[0] not in self.COMMON_WORDS:
+                    # Classify as person (2 words) or organization (3+ words)
+                    entity_type = (ExtractedEntityType.PERSON
+                                  if len(words) == 2
+                                  else ExtractedEntityType.ORGANIZATION)
                     entities.append(ExtractedEntity(
                         entity_type=entity_type,
-                        value=match.group(1),  # Capture group
+                        value=value,
+                        confidence=0.7,  # Lower confidence for regex-based NER
                         position=match.start(),
                         context=self._get_context(text, match.start(), match.end())
                     ))
-
-        # Extract proper nouns (potential persons/organizations)
-        for match in self.PROPER_NOUN_PATTERN.finditer(text):
-            value = match.group()
-            # Filter out common phrases
-            words = value.split()
-            if words[0] not in self.COMMON_WORDS:
-                # Classify as person (2 words) or organization (3+ words)
-                entity_type = (ExtractedEntityType.PERSON
-                              if len(words) == 2
-                              else ExtractedEntityType.ORGANIZATION)
-                entities.append(ExtractedEntity(
-                    entity_type=entity_type,
-                    value=value,
-                    confidence=0.7,  # Lower confidence for regex-based NER
-                    position=match.start(),
-                    context=self._get_context(text, match.start(), match.end())
-                ))
 
         # Deduplicate entities
         return self._deduplicate_entities(entities)
@@ -696,9 +748,9 @@ def extract_all(path: str, data: bytes) -> ExtractionResult:
     # Extract content
     result = content_extractor.extract(path, data)
 
-    # Extract entities if we have text
+    # Extract entities if we have text (pass mime_type for code-aware extraction)
     if result.text:
-        result.entities = entity_extractor.extract_entities(result.text)
+        result.entities = entity_extractor.extract_entities(result.text, result.mime_type)
         result.keywords = entity_extractor.extract_keywords(result.text)
 
     # Add structured file entities (JSON, YAML, CSV)
