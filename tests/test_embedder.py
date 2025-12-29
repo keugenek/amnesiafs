@@ -113,8 +113,9 @@ class TestEmbeddingGenerator(unittest.TestCase):
         result = self.generator.generate("Hello world")
         self.assertIsNotNone(result)
         self.assertIsInstance(result, bytes)
-        # Should be 384 dimensions * 4 bytes
-        self.assertEqual(len(result), 384 * 4)
+        # Should be model_dimensions * 4 bytes per float
+        expected_bytes = self.generator.dimensions * 4
+        self.assertEqual(len(result), expected_bytes)
 
     @unittest.skipUnless(
         EmbeddingGenerator().is_available,
