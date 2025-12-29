@@ -16,6 +16,7 @@ from datetime import datetime
 from typing import Dict, List, Any, Optional, Tuple
 from dataclasses import dataclass, asdict
 import html
+from .utils import format_bytes
 
 
 @dataclass
@@ -87,7 +88,7 @@ class DashboardGenerator:
             HTML content as bytes
         """
         title = title or f"Dashboard: {stats.path}"
-        subtitle = f"{stats.file_count} files | {self._format_bytes(stats.total_bytes)}"
+        subtitle = f"{stats.file_count} files | {format_bytes(stats.total_bytes)}"
 
         html_content = f"""<!DOCTYPE html>
 <html lang="en">
@@ -124,7 +125,7 @@ class DashboardGenerator:
                 <div class="stat-label">Files</div>
             </div>
             <div class="stat-card">
-                <div class="stat-value">{self._format_bytes(stats.total_bytes)}</div>
+                <div class="stat-value">{format_bytes(stats.total_bytes)}</div>
                 <div class="stat-label">Total Size</div>
             </div>
             <div class="stat-card">
@@ -170,7 +171,7 @@ class DashboardGenerator:
         items = ""
         for f in files[:10]:
             name = f.get('name', 'unknown')
-            size = self._format_bytes(f.get('size', 0))
+            size = format_bytes(f.get('size', 0))
             date = f.get('modified', '')
             items += f"""
             <li class="file-item">
@@ -192,14 +193,6 @@ class DashboardGenerator:
             content = section.get('content', '')
             result += f'<div class="section"><div class="section-title">{html.escape(title)}</div>{content}</div>'
         return result
-
-    def _format_bytes(self, size: int) -> str:
-        """Format bytes as human-readable string."""
-        for unit in ['B', 'KB', 'MB', 'GB']:
-            if size < 1024:
-                return f"{size:.1f} {unit}"
-            size /= 1024
-        return f"{size:.1f} TB"
 
 
 class ManifestGenerator:
@@ -253,7 +246,7 @@ class ManifestGenerator:
         if summary:
             content += f"{summary}\n\n"
         else:
-            content += f"This folder contains {stats.file_count} files ({self._format_bytes(stats.total_bytes)}).\n\n"
+            content += f"This folder contains {stats.file_count} files ({format_bytes(stats.total_bytes)}).\n\n"
 
         # Key Insights
         if insights:
@@ -293,14 +286,6 @@ class ManifestGenerator:
             content += "\n"
 
         return (yaml_block + content).encode('utf-8')
-
-    def _format_bytes(self, size: int) -> str:
-        """Format bytes as human-readable string."""
-        for unit in ['B', 'KB', 'MB', 'GB']:
-            if size < 1024:
-                return f"{size:.1f} {unit}"
-            size /= 1024
-        return f"{size:.1f} TB"
 
 
 class IndexGenerator:

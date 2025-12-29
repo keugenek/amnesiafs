@@ -26,6 +26,7 @@ from enum import Enum
 
 # Import generators for dual-view files
 from .generators import GeneratorFactory
+from .utils import format_timestamp
 
 
 class VirtualNodeType(Enum):
@@ -411,7 +412,7 @@ class VirtualAIHandler:
             "filesystem": "CognitiveFS",
             "version": "0.1.0",
             "status": "mounted",
-            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "timestamp": format_timestamp(time.time(), 'full'),
         }
 
         if self.cognitivefs and self.cognitivefs.superblock:
@@ -470,7 +471,7 @@ class VirtualAIHandler:
         """Get detailed indexing status."""
         lines = [
             "# Index Status",
-            f"Timestamp: {time.strftime('%Y-%m-%d %H:%M:%S')}",
+            f"Timestamp: {format_timestamp(time.time(), 'full')}",
             ""
         ]
 
@@ -498,7 +499,7 @@ class VirtualAIHandler:
             cursor.execute("SELECT path, updated_at FROM files ORDER BY updated_at DESC LIMIT 1")
             recent = cursor.fetchone()
             last_indexed_path = recent[0] if recent else "N/A"
-            last_indexed_time = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(recent[1])) if recent else "N/A"
+            last_indexed_time = format_timestamp(recent[1], 'full') if recent else "N/A"
 
             # Calculate embedding coverage (BUG-004 fix)
             files_without_embeddings = total_files - files_with_embeddings
@@ -1150,7 +1151,7 @@ List all queries:
             role = msg.get("role", "unknown").upper()
             content = msg.get("content", "")
             ts = msg.get("timestamp", 0)
-            time_str = time.strftime("%H:%M:%S", time.localtime(ts)) if ts else ""
+            time_str = format_timestamp(ts, 'time') if ts else ""
 
             lines.append(f"[{time_str}] {role}:")
             lines.append(content)
@@ -1544,7 +1545,7 @@ List all queries:
         """List date hierarchy or files."""
         if not target_path:
             # Return years with content (placeholder)
-            return [time.strftime("%Y")]
+            return [format_timestamp(time.time(), 'date')[:4]]  # Year only
         return []
 
     # ==================== Graph operations ====================
@@ -2819,7 +2820,7 @@ All files written to CognitiveFS are automatically versioned using git.
         ]
 
         for commit in commits:
-            ts = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(commit['timestamp']))
+            ts = format_timestamp(commit['timestamp'], 'full')
             short_hash = commit['hash'][:8]
             message = commit['message'][:60]
             lines.append(f"{short_hash}  {ts}  {message}")
@@ -2859,7 +2860,7 @@ All files written to CognitiveFS are automatically versioned using git.
         if not commit_info:
             return f"Commit not found: {commit_hash}\n".encode('utf-8')
 
-        ts = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(commit_info['timestamp']))
+        ts = format_timestamp(commit_info['timestamp'], 'full')
 
         # Get files changed
         files = vc.get_commit_files(commit_info['hash'])
@@ -2916,7 +2917,7 @@ All files written to CognitiveFS are automatically versioned using git.
         ]
 
         for i, commit in enumerate(commits):
-            ts = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(commit['timestamp']))
+            ts = format_timestamp(commit['timestamp'], 'full')
             short_hash = commit['hash'][:8]
             message = commit['message'][:50]
             version_label = "current" if i == 0 else f"v{len(commits) - i}"

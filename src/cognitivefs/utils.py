@@ -7,6 +7,7 @@ Common utilities for CognitiveFS.
 import os
 import sys
 import hashlib
+import time
 from typing import Optional, Tuple
 
 
@@ -48,6 +49,34 @@ def format_bytes(size: int) -> str:
             return f"{size:.2f} {unit}"
         size /= 1024.0
     return f"{size:.2f} PB"
+
+
+def format_timestamp(ts: float, style: str = 'full') -> str:
+    """
+    Format timestamp as human-readable string.
+
+    Args:
+        ts: Unix timestamp (seconds since epoch)
+        style: Format style - 'full', 'short', 'date', 'time'
+
+    Returns:
+        Formatted string
+
+    Examples:
+        format_timestamp(1234567890, 'full')   # '2009-02-13 23:31:30'
+        format_timestamp(1234567890, 'short')  # '2009-02-13 23:31'
+        format_timestamp(1234567890, 'date')   # '2009-02-13'
+        format_timestamp(1234567890, 'time')   # '23:31:30'
+    """
+    formats = {
+        'full': '%Y-%m-%d %H:%M:%S',
+        'short': '%Y-%m-%d %H:%M',
+        'date': '%Y-%m-%d',
+        'time': '%H:%M:%S',
+    }
+
+    format_string = formats.get(style, formats['full'])
+    return time.strftime(format_string, time.localtime(ts))
 
 
 def calculate_sha256(data: bytes) -> bytes:
