@@ -60,6 +60,8 @@ python tools/mount.py test.img K: --debug
 - **Text Extraction**: 30+ file types including JSON, CSV, YAML parsing
 - **Background Processing**: Async file analysis on write
 - **Virtual AI Directory**: `.ai/` folder with query, status, search, entities
+- **Dual-View Files**: Auto-generated `_DASHBOARD.html`, `_manifest.md`, `_index.json` in each `.ai/` folder
+- **Transparent Version Control**: Git-backed versioning of all files with LFS support
 
 ### ⚠️ Partial/Basic
 - **Topic Clustering**: Infrastructure exists, limited auto-population
@@ -69,7 +71,7 @@ python tools/mount.py test.img K: --debug
 ### ❌ Not Yet Implemented
 - **LLM Summaries**: Disabled for stability (shows file preview only)
 - **Multi-Modal**: No image/video/audio processing yet
-- **Version History**: Schema exists but not active
+- **Version Browser**: `/.ai/versions/` virtual paths not yet exposed
 - **Graph Visualization**: Returns help text only
 
 ## Virtual AI Paths (`.ai/`)
@@ -105,6 +107,53 @@ dir K:\.ai\entities\
 dir K:\.ai\related\myfile.txt
 ```
 
+## Dual-View Files (NEW)
+
+Every `.ai/` subdirectory automatically contains three generated files:
+
+| File | For | Description |
+|------|-----|-------------|
+| `_DASHBOARD.html` | Humans | Rich visual dashboard - open in browser |
+| `_manifest.md` | Both | Readable summary with YAML frontmatter |
+| `_index.json` | Agents | Structured JSON metadata |
+
+```powershell
+# Open visual dashboard in browser
+start K:\.ai\status\_DASHBOARD.html
+
+# Read manifest (human + agent friendly)
+type K:\.ai\status\_manifest.md
+
+# Parse JSON for automation
+type K:\.ai\status\_index.json | ConvertFrom-Json
+```
+
+The dashboard includes:
+- File count, total size, topic distribution
+- Entity word cloud
+- Recent files with metadata
+- Dark theme, no external dependencies
+
+## Transparent Version Control (NEW)
+
+All file changes are automatically versioned using git under the hood:
+
+```powershell
+# Version control repo created at: test.vcs/ (alongside test.img)
+# Every write, rename, delete is tracked automatically
+# Large files (>10MB) use Git LFS
+```
+
+**What's versioned:**
+- All real files (documents, code, media)
+- Directory creation/deletion
+- File renames and moves
+
+**What's NOT versioned:**
+- `.ai/` paths (virtual, computed on-the-fly)
+
+The git repo is stored at `<image>.vcs/` (e.g., `test.vcs/` for `test.img`).
+
 ## Project Structure
 
 ```
@@ -116,7 +165,9 @@ amnesiafs/
 │   ├── knowledge_graph.py   # Knowledge graph + SQLite storage
 │   ├── embedder.py          # Embedding generation (6 models, CUDA)
 │   ├── processor.py         # Background file processing
-│   ├── virtual_ai.py        # .ai/ virtual directory
+│   ├── virtual_ai.py        # .ai/ virtual directory handler
+│   ├── generators.py        # Dual-view file generators (NEW)
+│   ├── version_control.py   # Git-backed versioning (NEW)
 │   ├── extractor.py         # Text/entity extraction (30+ types)
 │   ├── llm.py               # Ollama LLM integration
 │   └── relationship_detector.py  # Co-occurrence & similarity
