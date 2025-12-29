@@ -19,18 +19,23 @@ try:
     from refuse.high import FUSE, Operations, FuseOSError
 except ImportError:
     try:
-        from fuse import FUSE, Operations, FuseOSError
+        # mfusepy - maintained fork with bug fixes (fixes self not defined bug)
+        from mfusepy import FUSE, Operations, FuseOSError
     except ImportError:
-        # Fallback - define minimal interface for development
-        class FuseOSError(OSError):
-            def __init__(self, errno_val, msg=""):
-                super().__init__(errno_val, msg)
-                self.errno = errno_val
+        try:
+            # Original fusepy (has known bugs in exception handling)
+            from fuse import FUSE, Operations, FuseOSError
+        except ImportError:
+            # Fallback - define minimal interface for development
+            class FuseOSError(OSError):
+                def __init__(self, errno_val, msg=""):
+                    super().__init__(errno_val, msg)
+                    self.errno = errno_val
 
-        class Operations:
-            pass
+            class Operations:
+                pass
 
-        FUSE = None
+            FUSE = None
 
 
 from .blockdev import BlockDevice, BlockDeviceError

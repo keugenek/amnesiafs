@@ -1,5 +1,7 @@
 # Core - required for filesystem to work
-fusepy>=3.0.1
+# mfusepy is a maintained fork of fusepy with bug fixes
+# (fixes NameError: self not defined in exception handler)
+mfusepy>=3.1.0
 pywin32>=306; sys_platform == 'win32'
 sqlalchemy>=2.0.0
 lz4>=4.3.0
