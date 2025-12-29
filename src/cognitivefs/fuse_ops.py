@@ -36,6 +36,7 @@ except ImportError:
 from .blockdev import BlockDevice, BlockDeviceError
 from .diskformat import Superblock, Inode, InodeType, InodeFlags, AllocationBitmap, BLOCK_SIZE
 from .virtual_ai import VirtualAIHandler
+from .version_control import GitVersionControl
 from .knowledge_graph import KnowledgeGraph, FileRecord, Entity, EntityType
 
 
@@ -144,6 +145,9 @@ class CognitiveFS(Operations):
         # Virtual AI directory handler
         self.virtual_ai = VirtualAIHandler(self)
 
+        # Git-based version control
+        self.version_control: Optional[GitVersionControl] = None
+
     def init(self, path):
         """Initialize filesystem on mount."""
         self._log(f"Mounting CognitiveFS from {self.device_path}")
@@ -185,11 +189,18 @@ class CognitiveFS(Operations):
         # Initialize knowledge graph
         self._init_knowledge_graph()
 
+        # Initialize version control
+        self._init_version_control()
+
         self._log(f"Filesystem mounted successfully (UUID: {self.superblock.uuid.hex()})")
 
     def destroy(self, path):
         """Cleanup on unmount."""
         self._log("Unmounting CognitiveFS")
+
+        # Commit any pending version control changes
+        if self.version_control and self.version_control.enabled:
+            self.version_control.commit_pending("Unmount snapshot")
 
         # Stop background processor
         if self.processor:
@@ -230,6 +241,20 @@ class CognitiveFS(Operations):
 
         # Initialize background processor for knowledge extraction
         self._init_processor()
+
+    def _init_version_control(self):
+        """Initialize git-based version control storage."""
+        if self.device_path.endswith('.img'):
+            repo_path = self.device_path.replace('.img', '.vcs')
+        else:
+            uuid_hex = self.superblock.uuid.hex()
+            repo_path = os.path.join(os.path.expanduser('~'), '.cognitivefs', 'repos', uuid_hex)
+
+        self.version_control = GitVersionControl(repo_path, self._log)
+        self.version_control.init_repo()
+
+        if self.version_control.enabled and not self.version_control.has_commits():
+            self.version_control.commit_pending("Initial snapshot")
 
     def _init_processor(self):
         """Initialize the background processor for knowledge extraction."""
@@ -627,6 +652,10 @@ class CognitiveFS(Operations):
         parent_inode.nlinks += 1
         self._write_inode(parent_inode)
 
+        # Record in version control
+        if self.version_control and self.version_control.enabled:
+            self.version_control.record_directory(path, commit=True)
+
         return 0
 
     def rmdir(self, path):
@@ -661,6 +690,10 @@ class CognitiveFS(Operations):
             del self.inode_cache[inode.inode_num]
         if inode.inode_num in self.dir_cache:
             del self.dir_cache[inode.inode_num]
+
+        # Record in version control
+        if self.version_control and self.version_control.enabled:
+            self.version_control.remove_path(path, commit=True)
 
         return 0
 
@@ -709,6 +742,10 @@ class CognitiveFS(Operations):
         if self.knowledge_graph:
             self.knowledge_graph.delete_file(path)
 
+        # Record in version control
+        if self.version_control and self.version_control.enabled:
+            self.version_control.remove_path(path, commit=True)
+
         return 0
 
     def rename(self, old, new):
@@ -740,6 +777,10 @@ class CognitiveFS(Operations):
         # Update knowledge graph with new path
         if self.knowledge_graph:
             self.knowledge_graph.rename_file(old, new)
+
+        # Record in version control
+        if self.version_control and self.version_control.enabled:
+            self.version_control.rename_path(old, new, commit=True)
 
         return 0
 
@@ -872,6 +913,10 @@ class CognitiveFS(Operations):
         fh = self.fh_counter
         self.open_files[fh] = (new_inode_num, os.O_RDWR)
 
+        # Record in version control
+        if self.version_control and self.version_control.enabled:
+            self.version_control.record_file(path, b"", commit=True)
+
         return fh
 
     def read(self, path, size, offset, fh):
@@ -928,6 +973,10 @@ class CognitiveFS(Operations):
         inode.modified_at = int(time.time())
         self._write_inode(inode)
 
+        # Record in version control
+        if self.version_control and self.version_control.enabled:
+            self.version_control.record_file(path, bytes(existing), commit=True)
+
         return len(data)
 
     def truncate(self, path, length, fh=None):
@@ -956,6 +1005,10 @@ class CognitiveFS(Operations):
 
         # Queue for re-extraction since content changed
         self._queue_for_extraction(path, inode.inode_num)
+
+        # Record in version control
+        if self.version_control and self.version_control.enabled:
+            self.version_control.record_file(path, data, commit=True)
 
         return 0
 
