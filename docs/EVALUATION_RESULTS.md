@@ -62,102 +62,208 @@ This document captures the results of RAGAS (Retrieval Augmented Generation Asse
 
 ---
 
-## Follow-Up Improvements
+## Research-Based Improvement Roadmap
 
-### P0 - Critical (Immediate)
+Based on deep research of 15+ recent arXiv papers (2024-2025) and industry best practices, this roadmap outlines state-of-the-art techniques for improving CognitiveFS's RAG system.
 
-#### 1. Improve Retrieval Quality
+### RAG Evolution: Current State
+
+| Paradigm | Description | CognitiveFS Status |
+|----------|-------------|-------------------|
+| **Naive RAG** | Simple retrieve -> read -> generate | Current |
+| **Advanced RAG** | Pre/post-retrieval optimization | Target |
+| **Modular RAG** | Pluggable components, routing | Future |
+
+---
+
+## Phase 1: Retrieval Foundation (P0 - Critical)
+
+### 1.1 Hybrid Search (BM25 + Semantic)
 **Problem**: Context precision at 0.10 means 90% of retrieved docs are irrelevant.
 
-**Actions**:
-- [ ] Implement hybrid search (BM25 + semantic) for better keyword matching
-- [ ] Add reranking step using cross-encoder model
-- [ ] Tune similarity threshold to filter low-confidence results
-- [ ] Implement MMR (Maximal Marginal Relevance) to reduce redundancy
+**Research**: Industry consensus shows BM25 + Dense + Sparse vectors provide 15-30% recall improvement. Three-way hybrid retrieval outperforms pure vector or two-way approaches ([IBM Research](https://infiniflow.org/blog/best-hybrid-search-solution)).
 
-**Files**: `src/cognitivefs/knowledge_graph.py:search_files()`
+**Implementation**:
+- [ ] Add SQLite FTS5 index for BM25 keyword search
+- [ ] Implement Reciprocal Rank Fusion (RRF) for combining results
+- [ ] Tune alpha parameter for BM25/semantic weighting
 
-#### 2. Optimize Context Selection
-**Problem**: Retrieved contexts may be too long, diluting relevant information.
+**Files**: `src/cognitivefs/knowledge_graph.py`
 
-**Actions**:
-- [ ] Implement chunk-level retrieval instead of full-document
-- [ ] Add context compression/summarization before LLM
-- [ ] Limit context to most relevant passages (top-k sentences)
+**Expected Impact**: Context precision 0.10 -> 0.40
 
-**Files**: `src/cognitivefs/llm.py:KnowledgeQueryEngine`
+### 1.2 Cross-Encoder Reranking
+**Research**: BGE-reranker-v2-m3 and ColBERT provide significant precision improvements by scoring query-document pairs directly ([HuggingFace BGE](https://huggingface.co/BAAI/bge-reranker-v2-m3)).
 
-### P1 - High Priority (Next Sprint)
+**Implementation**:
+- [ ] Add `src/cognitivefs/reranker.py` with CrossEncoder
+- [ ] Integrate reranking after initial retrieval
+- [ ] Use BAAI/bge-reranker-base (lightweight) or v2-m3 (8192 tokens)
 
-#### 3. Upgrade Embedding Model
-**Problem**: all-MiniLM-L6-v2 (384d) may miss domain-specific semantics.
+**Files**: NEW `src/cognitivefs/reranker.py`, `src/cognitivefs/llm.py`
 
-**Actions**:
-- [ ] Evaluate larger models: E5-large, BGE-large, GTE-large
-- [ ] Test domain-specific fine-tuning on filesystem/code data
-- [ ] Implement embedding model configuration in settings
+**Expected Impact**: +20% precision on retrieved results
 
-**Files**: `src/cognitivefs/embedder.py`
+---
 
-#### 4. Improve Prompt Engineering
+## Phase 2: Query Enhancement (P1 - High)
+
+### 2.1 RAG-Fusion Multi-Query
+**Paper**: [RAG-Fusion (arXiv:2402.03367)](https://arxiv.org/abs/2402.03367)
+
+**Key Insight**: Generate multiple query variants, retrieve for each, combine with RRF. Provides broader context coverage by contextualizing the original query from various perspectives.
+
+**Implementation**:
+- [ ] Add query expansion via LLM (3-5 variants)
+- [ ] Parallel retrieval for each variant
+- [ ] RRF fusion of all results
+
+**Files**: `src/cognitivefs/llm.py`
+
+### 2.2 HyDE (Hypothetical Document Embeddings)
+**Paper**: [HyDE (arXiv:2212.10496)](https://arxiv.org/abs/2212.10496)
+
+**Key Insight**: Generate a hypothetical answer document, embed it, use for retrieval. Improves semantic matching for sparse/ambiguous queries.
+
+**Trade-off**: ~50% slower but better semantic matching. Best for complex queries.
+
+**Implementation**:
+- [ ] Generate hypothetical document for query
+- [ ] Embed hypothetical document
+- [ ] Use embedding for similarity search
+
+### 2.3 Improved Prompts
 **Problem**: Answer relevancy at 0.28 suggests prompts need work.
 
-**Actions**:
-- [ ] Add few-shot examples to query prompt
-- [ ] Implement chain-of-thought prompting for complex queries
-- [ ] Add instruction to cite sources in response
-- [ ] Test different prompt templates and measure impact
+**Implementation**:
+- [ ] Add structured instructions (ONLY use context, cite sources)
+- [ ] Few-shot examples for complex queries
+- [ ] Chain-of-thought for multi-step reasoning
 
 **Files**: `src/cognitivefs/llm.py:_build_query_prompt()`
 
-#### 5. Reduce Latency
-**Problem**: 6s average is too slow for interactive filesystem use.
+**Expected Impact**: Answer relevancy 0.28 -> 0.60
 
-**Actions**:
-- [ ] Implement embedding cache (avoid re-embedding same queries)
-- [ ] Add FAISS/ScaNN for faster ANN search
-- [ ] Batch embedding generation for multiple files
-- [ ] Consider smaller/faster LLM for simple queries
+---
 
-**Files**: `src/cognitivefs/knowledge_graph.py`, `src/cognitivefs/embedder.py`
+## Phase 3: Adaptive Retrieval (P1 - High)
 
-### P2 - Medium Priority (Backlog)
+### 3.1 CRAG (Corrective RAG)
+**Paper**: [CRAG (arXiv:2401.15884)](https://arxiv.org/abs/2401.15884)
 
-#### 6. Expand Evaluation Dataset
-**Problem**: 10 samples is too small for reliable metrics.
+**Key Insight**: Lightweight retrieval evaluator (0.77B) scores retrieval quality. Triggers corrective actions (web search, decomposition) when evidence is weak.
 
-**Actions**:
-- [ ] Generate 50+ test cases covering all feature areas
-- [ ] Add adversarial/edge case questions
-- [ ] Create ground-truth annotations for real indexed files
-- [ ] Implement automated dataset generation from KG content
+**Implementation**:
+- [ ] Add retrieval quality evaluator (CORRECT/AMBIGUOUS/INCORRECT)
+- [ ] Fallback to "I don't have enough information" for INCORRECT
+- [ ] Optional: web search fallback for ambiguous queries
 
-#### 7. Add Evaluation CI/CD
-**Actions**:
-- [ ] Run RAGAS evaluation on PR merges
-- [ ] Track metrics over time (regression detection)
-- [ ] Set minimum thresholds for metric scores
-- [ ] Generate evaluation reports automatically
+**Files**: `src/cognitivefs/llm.py`
 
-#### 8. Implement Query Understanding
-**Actions**:
-- [ ] Add query classification (factual vs. exploratory)
-- [ ] Implement query expansion with synonyms
-- [ ] Support boolean operators (AND, OR, NOT)
-- [ ] Handle multi-hop reasoning queries
+**Expected Impact**: Faithfulness 0.56 -> 0.75 (reduce hallucination)
 
-### P3 - Nice to Have (Future)
+### 3.2 Self-RAG
+**Paper**: [Self-RAG (arXiv:2310.11511)](https://arxiv.org/abs/2310.11511)
 
-#### 9. Advanced RAG Techniques
-- [ ] Implement RAG-Fusion (multiple query variations)
-- [ ] Add self-reflection/correction loop
-- [ ] Implement CRAG (Corrective RAG) pattern
-- [ ] Test GraphRAG for entity-centric queries
+**Key Insight**: Train LM with reflection/control tokens to decide when to retrieve and how to critique evidence. Adaptive retrieval on-demand.
 
-#### 10. User Feedback Loop
-- [ ] Add thumbs up/down for responses in .ai directory
-- [ ] Store feedback for fine-tuning/improvement
-- [ ] Implement active learning for retrieval
+**Implementation** (Advanced):
+- [ ] Add reflection tokens for retrieval decisions
+- [ ] Self-critique generated responses
+- [ ] Iterative refinement loop
+
+---
+
+## Phase 4: Advanced Chunking (P2 - Medium)
+
+### 4.1 Late Chunking
+**Paper**: [Late Chunking (arXiv:2409.04701)](https://arxiv.org/abs/2409.04701)
+
+**Key Insight**: Embed full document first, then chunk and pool. Preserves contextual information across chunk boundaries. 3.6% improvement over naive chunking.
+
+**Implementation**:
+- [ ] Embed full document with long-context model
+- [ ] Pool token embeddings into chunk embeddings
+- [ ] Store contextual chunk embeddings
+
+**Files**: `src/cognitivefs/processor.py`, `src/cognitivefs/embedder.py`
+
+### 4.2 RAPTOR (Hierarchical Retrieval)
+**Paper**: [RAPTOR (arXiv:2401.18059)](https://arxiv.org/abs/2401.18059) - ICLR 2024
+
+**Key Insight**: Build summary tree by recursively clustering and summarizing chunks. Retrieve at different abstraction levels. 20% improvement on multi-hop QA.
+
+**Implementation**:
+- [ ] Cluster similar chunks
+- [ ] Generate cluster summaries
+- [ ] Build hierarchical tree structure
+- [ ] Retrieve from multiple tree levels
+
+---
+
+## Phase 5: Graph-Enhanced RAG (P2 - Medium)
+
+### 5.1 GraphRAG
+**Paper**: [GraphRAG (arXiv:2404.16130)](https://arxiv.org/abs/2404.16130) - Microsoft
+
+**Key Insight**: Extract entity knowledge graph, detect communities, pre-generate community summaries. Excels at "connecting the dots" across disparate information.
+
+**CognitiveFS Advantage**: Already has knowledge graph with entities!
+
+**Implementation**:
+- [ ] Add community detection (Louvain via networkx)
+- [ ] Generate community summaries
+- [ ] Retrieve at entity + community level
+- [ ] Combine local (entity) and global (community) retrieval
+
+**Files**: `src/cognitivefs/knowledge_graph.py`
+
+**Resources**: [Microsoft GraphRAG](https://github.com/microsoft/graphrag)
+
+---
+
+## Phase 6: Agentic RAG (P3 - Future)
+
+### 6.1 Multi-Agent Architecture
+**Paper**: [Agentic RAG Survey (arXiv:2501.09136)](https://arxiv.org/abs/2501.09136)
+
+**Key Insight**: Autonomous AI agents manage retrieval using reflection, planning, tool use, and multi-agent collaboration. Dynamic, context-sensitive retrieval.
+
+**Conceptual Design**:
+```
+Query Router Agent (classify: factual/exploratory/multi-hop)
+         |
+    +----+----+
+    v    v    v
+Simple  Entity  Multi-hop
+Agent   Agent   Agent
+    +----+----+
+         v
+   Synthesizer Agent
+```
+
+**Implementation**:
+- [ ] Query classification agent
+- [ ] Specialized retrieval agents
+- [ ] Response synthesis agent
+- [ ] Agent coordination framework
+
+### 6.2 Reasoning RAG
+**Paper**: [Reasoning RAG (arXiv:2506.10408)](https://arxiv.org/html/2506.10408v1)
+
+**Key Insight**: System 1 (predefined modular pipelines) vs System 2 (autonomous tool orchestration). Model autonomously orchestrates tool interaction during inference.
+
+---
+
+## Target Metrics
+
+| Metric | Current | Phase 1 | Phase 2 | Phase 3 | Phase 4+ |
+|--------|---------|---------|---------|---------|----------|
+| Faithfulness | 0.56 | 0.65 | 0.70 | 0.80 | 0.85 |
+| Answer Relevancy | 0.28 | 0.45 | 0.60 | 0.70 | 0.75 |
+| Context Precision | 0.10 | 0.40 | 0.55 | 0.65 | 0.70 |
+| Context Recall | 0.20 | 0.35 | 0.50 | 0.60 | 0.65 |
+| Avg Latency | 6000ms | 5000ms | 4000ms | 3500ms | 3000ms |
 
 ---
 
