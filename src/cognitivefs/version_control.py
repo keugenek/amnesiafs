@@ -242,3 +242,154 @@ class GitVersionControl:
         if check and result.returncode != 0:
             self.logger(f"Git command failed: git {' '.join(args)}\n{result.stderr}")
         return result
+
+    # ========== Version History Methods ==========
+
+    def get_all_commits(self, limit: int = 100) -> list:
+        """Get list of all commits with metadata."""
+        if not self.enabled:
+            return []
+
+        result = self._run_git([
+            "log", f"--max-count={limit}",
+            "--format=%H|%s|%an|%at"
+        ], check=False)
+
+        if result.returncode != 0:
+            return []
+
+        commits = []
+        for line in result.stdout.strip().split('\n'):
+            if not line:
+                continue
+            parts = line.split('|', 3)
+            if len(parts) >= 4:
+                commits.append({
+                    'hash': parts[0],
+                    'message': parts[1],
+                    'author': parts[2],
+                    'timestamp': int(parts[3]) if parts[3].isdigit() else 0
+                })
+        return commits
+
+    def get_file_history(self, path: str, limit: int = 50) -> list:
+        """Get commit history for a specific file."""
+        if not self.enabled:
+            return []
+
+        rel_path = self._relative_path(path)
+        if rel_path is None:
+            return []
+
+        result = self._run_git([
+            "log", f"--max-count={limit}",
+            "--format=%H|%s|%an|%at",
+            "--follow",  # Follow renames
+            "--", rel_path
+        ], check=False)
+
+        if result.returncode != 0:
+            return []
+
+        commits = []
+        for line in result.stdout.strip().split('\n'):
+            if not line:
+                continue
+            parts = line.split('|', 3)
+            if len(parts) >= 4:
+                commits.append({
+                    'hash': parts[0],
+                    'message': parts[1],
+                    'author': parts[2],
+                    'timestamp': int(parts[3]) if parts[3].isdigit() else 0
+                })
+        return commits
+
+    def get_file_at_version(self, path: str, commit_hash: str) -> Optional[bytes]:
+        """Get file content at a specific version."""
+        if not self.enabled:
+            return None
+
+        rel_path = self._relative_path(path)
+        if rel_path is None:
+            return None
+
+        result = subprocess.run(
+            ["git", "show", f"{commit_hash}:{rel_path}"],
+            cwd=self.repo_path,
+            capture_output=True,
+        )
+
+        if result.returncode != 0:
+            return None
+
+        return result.stdout
+
+    def get_commit_files(self, commit_hash: str) -> list:
+        """Get list of files changed in a commit."""
+        if not self.enabled:
+            return []
+
+        result = self._run_git([
+            "diff-tree", "--no-commit-id", "--name-status", "-r", commit_hash
+        ], check=False)
+
+        if result.returncode != 0:
+            return []
+
+        files = []
+        for line in result.stdout.strip().split('\n'):
+            if not line:
+                continue
+            parts = line.split('\t', 1)
+            if len(parts) == 2:
+                status_map = {'A': 'added', 'M': 'modified', 'D': 'deleted', 'R': 'renamed'}
+                files.append({
+                    'status': status_map.get(parts[0][0], parts[0]),
+                    'path': '/' + parts[1]
+                })
+        return files
+
+    def get_diff(self, commit_hash: str, path: str = None) -> str:
+        """Get diff for a commit, optionally for a specific file."""
+        if not self.enabled:
+            return ""
+
+        args = ["show", "--format=", commit_hash]
+        if path:
+            rel_path = self._relative_path(path)
+            if rel_path:
+                args.extend(["--", rel_path])
+
+        result = self._run_git(args, check=False)
+        return result.stdout if result.returncode == 0 else ""
+
+    def get_stats(self) -> Dict[str, Any]:
+        """Get version control statistics."""
+        if not self.enabled:
+            return {'enabled': False}
+
+        stats = {
+            'enabled': True,
+            'repo_path': str(self.repo_path),
+            'lfs_available': self.lfs_available,
+        }
+
+        # Count commits
+        result = self._run_git(["rev-list", "--count", "HEAD"], check=False)
+        if result.returncode == 0:
+            stats['total_commits'] = int(result.stdout.strip())
+        else:
+            stats['total_commits'] = 0
+
+        # Get tracked files count
+        result = self._run_git(["ls-files"], check=False)
+        if result.returncode == 0:
+            stats['tracked_files'] = len([f for f in result.stdout.strip().split('\n') if f])
+        else:
+            stats['tracked_files'] = 0
+
+        # Get remotes
+        stats['remotes'] = self.list_remotes()
+
+        return stats

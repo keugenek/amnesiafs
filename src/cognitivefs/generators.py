@@ -468,13 +468,15 @@ class GeneratorFactory:
             '_index.json': self.index.generate(stats),
         }
 
-    def get_cached_or_generate(self, path: str, filename: str) -> bytes:
+    def get_cached_or_generate(self, path: str, filename: str,
+                                cognitivefs=None) -> bytes:
         """
         Get cached content or generate new.
 
         Args:
             path: Virtual path
             filename: One of '_DASHBOARD.html', '_manifest.md', '_index.json'
+            cognitivefs: Optional CognitiveFS instance for version control access
 
         Returns:
             File content as bytes
@@ -488,7 +490,13 @@ class GeneratorFactory:
             if now - timestamp < self._cache_ttl:
                 return content
 
-        # Generate fresh
+        # Check if this is the versions path - use special generator
+        if path == '/.ai/versions':
+            content = self._generate_versions_file(filename, cognitivefs)
+            self._cache[cache_key] = (now, content)
+            return content
+
+        # Generate fresh using standard stats
         stats = self.get_stats_from_kg(path)
 
         if filename == '_DASHBOARD.html':
@@ -503,6 +511,173 @@ class GeneratorFactory:
         # Cache it
         self._cache[cache_key] = (now, content)
         return content
+
+    def _generate_versions_file(self, filename: str, cognitivefs=None) -> bytes:
+        """Generate version-specific dashboard/manifest/index."""
+        now = datetime.now()
+
+        # Get version control stats
+        vc_stats = {
+            'enabled': False,
+            'total_commits': 0,
+            'tracked_files': 0,
+            'repo_path': '',
+            'lfs_available': False,
+            'remotes': {},
+        }
+        commits = []
+
+        if cognitivefs and hasattr(cognitivefs, 'version_control'):
+            vc = cognitivefs.version_control
+            if vc and vc.enabled:
+                vc_stats = vc.get_stats()
+                commits = vc.get_all_commits(limit=20)
+
+        if filename == '_DASHBOARD.html':
+            return self._generate_versions_dashboard(vc_stats, commits, now)
+        elif filename == '_manifest.md':
+            return self._generate_versions_manifest(vc_stats, commits, now)
+        elif filename == '_index.json':
+            return self._generate_versions_index(vc_stats, commits, now)
+        return b''
+
+    def _generate_versions_dashboard(self, stats: dict, commits: list,
+                                     now: datetime) -> bytes:
+        """Generate version history dashboard HTML."""
+        # Build commit timeline
+        commit_items = ""
+        for c in commits[:15]:
+            ts = datetime.fromtimestamp(c['timestamp']).strftime('%Y-%m-%d %H:%M')
+            short_hash = c['hash'][:8]
+            message = html.escape(c['message'][:50])
+            commit_items += f"""
+            <li class="file-item">
+                <span class="file-name" title="{c['hash']}">{short_hash}</span>
+                <span>{message}</span>
+                <span class="file-meta">{ts}</span>
+            </li>
+            """
+
+        html_content = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Version Control Dashboard</title>
+    {DashboardGenerator.CSS_STYLES}
+</head>
+<body>
+    <div class="container">
+        <h1>Version Control Dashboard</h1>
+        <h2>Git-backed transparent versioning</h2>
+
+        <div class="stats">
+            <div class="stat-card">
+                <div class="stat-value">{stats.get('total_commits', 0)}</div>
+                <div class="stat-label">Commits</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value">{stats.get('tracked_files', 0)}</div>
+                <div class="stat-label">Tracked Files</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value">{'Yes' if stats.get('lfs_available') else 'No'}</div>
+                <div class="stat-label">Git LFS</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value">{len(stats.get('remotes', {}))}</div>
+                <div class="stat-label">Remotes</div>
+            </div>
+        </div>
+
+        <div class="section">
+            <div class="section-title">Recent Commits</div>
+            {'<ul class="file-list">' + commit_items + '</ul>' if commit_items else '<p class="empty">No commits yet</p>'}
+        </div>
+
+        <div class="section">
+            <div class="section-title">Usage</div>
+            <ul class="file-list">
+                <li class="file-item"><code>cat /.ai/versions/commits</code> - List all commits</li>
+                <li class="file-item"><code>cat /.ai/versions/file/path.txt</code> - File history</li>
+                <li class="file-item"><code>cat /.ai/versions/&lt;hash&gt;/_info.txt</code> - Commit details</li>
+                <li class="file-item"><code>cat /.ai/versions/&lt;hash&gt;/_diff.txt</code> - Commit diff</li>
+            </ul>
+        </div>
+
+        <p class="timestamp">Generated: {now.isoformat()}</p>
+    </div>
+</body>
+</html>
+"""
+        return html_content.encode('utf-8')
+
+    def _generate_versions_manifest(self, stats: dict, commits: list,
+                                    now: datetime) -> bytes:
+        """Generate version history manifest markdown."""
+        frontmatter = f"""---
+path: /.ai/versions
+updated: {now.isoformat()}
+total_commits: {stats.get('total_commits', 0)}
+tracked_files: {stats.get('tracked_files', 0)}
+lfs_available: {stats.get('lfs_available', False)}
+remotes: {list(stats.get('remotes', {}).keys())}
+---
+
+# Version Control
+
+Git-backed transparent versioning for all files.
+
+## Statistics
+* **Total Commits:** {stats.get('total_commits', 0)}
+* **Tracked Files:** {stats.get('tracked_files', 0)}
+* **Git LFS:** {'Available' if stats.get('lfs_available') else 'Not available'}
+* **Repo Path:** {stats.get('repo_path', 'N/A')}
+
+## Recent Commits
+"""
+        for c in commits[:10]:
+            ts = datetime.fromtimestamp(c['timestamp']).strftime('%Y-%m-%d %H:%M')
+            frontmatter += f"* `{c['hash'][:8]}` - {c['message'][:40]} ({ts})\n"
+
+        frontmatter += """
+## Usage
+
+```
+cat /.ai/versions/commits           # List all commits
+cat /.ai/versions/file/path.txt     # File version history
+cat /.ai/versions/<hash>/_info.txt  # Commit details
+```
+"""
+        return frontmatter.encode('utf-8')
+
+    def _generate_versions_index(self, stats: dict, commits: list,
+                                 now: datetime) -> bytes:
+        """Generate version history index JSON."""
+        data = {
+            'path': '/.ai/versions',
+            'updated': now.isoformat(),
+            'version_control': {
+                'enabled': stats.get('enabled', False),
+                'total_commits': stats.get('total_commits', 0),
+                'tracked_files': stats.get('tracked_files', 0),
+                'lfs_available': stats.get('lfs_available', False),
+                'repo_path': stats.get('repo_path', ''),
+                'remotes': stats.get('remotes', {}),
+            },
+            'recent_commits': [
+                {
+                    'hash': c['hash'],
+                    'short_hash': c['hash'][:8],
+                    'message': c['message'],
+                    'author': c['author'],
+                    'timestamp': c['timestamp'],
+                    'date': datetime.fromtimestamp(c['timestamp']).isoformat(),
+                }
+                for c in commits[:20]
+            ]
+        }
+        return json.dumps(data, indent=2, ensure_ascii=False).encode('utf-8')
 
     def invalidate_cache(self, path: str = None):
         """

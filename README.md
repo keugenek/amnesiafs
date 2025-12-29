@@ -71,7 +71,6 @@ python tools/mount.py test-data/test.img K: --debug
 ### ❌ Not Yet Implemented
 - **LLM Summaries**: Disabled for stability (shows file preview only)
 - **Multi-Modal**: No image/video/audio processing yet
-- **Version Browser**: `/.ai/versions/` virtual paths not yet exposed
 - **Graph Visualization**: Returns help text only
 
 ## Virtual AI Paths (`.ai/`)
@@ -91,6 +90,7 @@ When mounted, browse `K:\.ai\` for AI-powered virtual directories:
 | `.ai/by-date/` | ❌ Stub | Not fully implemented |
 | `.ai/chat/` | ⚠️ Basic | Session handling infrastructure |
 | `.ai/graph/` | ❌ Stub | Returns help text only |
+| `.ai/versions/` | ✅ Working | Browse git version history, diffs, file at version |
 
 **Example usage:**
 ```powershell
@@ -105,6 +105,12 @@ dir K:\.ai\entities\
 
 # Find related files (requires embeddings)
 dir K:\.ai\related\myfile.txt
+
+# Browse version history
+type K:\.ai\versions\commits              # List all commits
+type K:\.ai\versions\file\myfile.txt      # File version history
+type K:\.ai\versions\abc1234\_info.txt    # Commit details
+type K:\.ai\versions\abc1234\myfile.txt   # File at specific version
 ```
 
 ## Dual-View Files (NEW)
