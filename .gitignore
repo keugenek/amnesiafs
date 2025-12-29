@@ -18,11 +18,10 @@ brain.img
 
 # Evaluation artifacts
 eval-results/
+
+# Test data (images, databases, version control)
 test-data/*.img
 test-data/*.db
 test-data/*.db-shm
 test-data/*.db-wal
-
-# Version control repos (stored alongside image files)
-*.vcs/
-test.vcs/
+test-data/*.vcs/

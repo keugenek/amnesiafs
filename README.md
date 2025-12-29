@@ -11,10 +11,10 @@ A true FUSE-based file system with AI cognition built into every file operation.
 .\setup.ps1
 
 # Create and format a test image
-python tools/format_device.py test.img --force
+python tools/format_device.py test-data/test.img --force
 
 # Mount to K: drive
-python tools/mount.py test.img K: --debug
+python tools/mount.py test-data/test.img K: --debug
 ```
 
 ### Manual Setup
@@ -34,8 +34,8 @@ python tools/mount.py test.img K: --debug
 
 3. **Format a test image** (or physical drive):
    ```powershell
-   # Create 100MB test image
-   python tools/format_device.py test.img --force
+   # Create 100MB test image in test-data folder
+   python tools/format_device.py test-data/test.img --force
 
    # Or format a physical drive (CAUTION: erases all data!)
    # python tools/format_device.py \\.\PhysicalDrive1 --force
@@ -43,7 +43,7 @@ python tools/mount.py test.img K: --debug
 
 4. **Mount the filesystem**:
    ```powershell
-   python tools/mount.py test.img K: --debug
+   python tools/mount.py test-data/test.img K: --debug
    ```
 
 5. **Use the filesystem**:
@@ -161,7 +161,7 @@ All file changes are automatically versioned using git under the hood:
 **Remote sync** (optional):
 ```powershell
 # Add a remote to sync version history
-cd C:\Users\admin\amnesiafs\test.vcs
+cd test-data/test.vcs
 git remote add origin https://github.com/user/my-brain-backup.git
 git push -u origin master
 ```
