@@ -178,16 +178,38 @@ class KnowledgeQueryEngine:
     Query engine that combines knowledge graph with LLM.
 
     Retrieves relevant context from KG and uses LLM to answer questions.
+
+    Phase 1 RAG Improvements:
+    - Hybrid search (BM25 + semantic) with RRF fusion
+    - Cross-encoder reranking for precision
+    - Improved prompts for better answer relevancy
     """
 
-    SYSTEM_PROMPT = """You are a helpful AI assistant with access to a personal knowledge base.
-Answer questions based on the provided context from the user's files.
-If the context doesn't contain enough information, say so.
-Be concise and direct. Reference specific files when relevant."""
+    # Improved system prompt (Phase 2.3)
+    SYSTEM_PROMPT = """You are a helpful AI assistant answering questions about the user's files.
+
+IMPORTANT INSTRUCTIONS:
+1. Answer ONLY based on the provided context from the knowledge base
+2. If the context doesn't contain enough information to answer, say "I don't have enough information in the indexed files to answer this question"
+3. When referencing information, cite the specific file path
+4. Be concise but complete - include all relevant details from the context
+5. Do not make up or infer information not present in the context"""
 
     def __init__(self, knowledge_graph, llm_client: OllamaClient):
         self.kg = knowledge_graph
         self.llm = llm_client
+        self._reranker = None
+
+    @property
+    def reranker(self):
+        """Lazy-load reranker."""
+        if self._reranker is None:
+            try:
+                from .reranker import get_reranker
+                self._reranker = get_reranker()
+            except Exception as e:
+                logger.debug(f"Reranker not available: {e}")
+        return self._reranker
 
     def query(self, question: str, max_context_files: int = 3) -> str:
         """
@@ -265,15 +287,21 @@ Be concise and direct. Reference specific files when relevant."""
         if entity_context:
             full_context += f"\n[Knowledge Graph]\n{entity_context}\n"
 
-        # 5. Generate answer
-        prompt = f"""Context from your knowledge base:
+        # 5. Generate answer with improved prompt (Phase 2.3)
+        prompt = f"""CONTEXT FROM KNOWLEDGE BASE:
 {full_context}
 
-Question: {question}
+USER QUESTION: {question}
 
-Answer based on the context above. Reference specific files and entities when relevant:"""
+INSTRUCTIONS:
+- Answer the question using ONLY the information from the context above
+- If you cite information, mention which file it came from (e.g., "According to /docs/file.md...")
+- If the context doesn't contain enough information to answer the question, say so clearly
+- Be concise but thorough
 
-        response = self.llm.generate(prompt, system=self.SYSTEM_PROMPT, max_tokens=256)
+ANSWER:"""
+
+        response = self.llm.generate(prompt, system=self.SYSTEM_PROMPT, max_tokens=512)
 
         if response:
             result['answer'] = response.content
@@ -289,49 +317,87 @@ Answer based on the context above. Reference specific files and entities when re
         return result
 
     def _find_relevant_files(self, query: str, limit: int) -> List[Dict]:
-        """Find files relevant to the query using embeddings."""
+        """
+        Find files relevant to the query using hybrid search + reranking.
+
+        Phase 1 RAG Improvements:
+        1. Hybrid search (BM25 + semantic) with RRF fusion
+        2. Cross-encoder reranking for precision
+
+        Args:
+            query: Natural language query
+            limit: Maximum files to return
+
+        Returns:
+            List of file dicts with path, text, summary, similarity
+        """
         if not self.kg:
             return []
 
-        # Try to get query embedding
         try:
-            from .embedder import EmbeddingGenerator, cosine_similarity
+            from .embedder import EmbeddingGenerator
+
+            # Step 1: Generate query embedding for semantic search
             embedder = EmbeddingGenerator()
-            if not embedder.is_available:
-                # Fall back to text search
+            query_vec = None
+            if embedder.is_available:
+                query_vec = embedder.generate(query)
+
+            # Step 2: Hybrid search (BM25 + semantic with RRF fusion)
+            # Fetch more candidates for reranking
+            candidates_limit = limit * 3 if self.reranker and self.reranker.is_available else limit
+
+            hybrid_results = self.kg.hybrid_search(
+                query=query,
+                query_embedding=query_vec,
+                limit=candidates_limit,
+                alpha=0.5  # Equal weight to BM25 and semantic
+            )
+
+            if not hybrid_results:
+                # Fallback to text search
                 return self._text_search_files(query, limit)
 
-            query_vec = embedder.generate(query)
-            if not query_vec:
-                return self._text_search_files(query, limit)
-
-            # Find similar files
-            cursor = self.kg.conn.cursor()
-            cursor.execute("""
-                SELECT f.id, f.path, f.extracted_text, f.summary, e.vector
-                FROM files f
-                JOIN embeddings e ON f.embedding_id = e.id
-                WHERE e.vector IS NOT NULL
-            """)
-
+            # Convert to dict format
             results = []
-            for row in cursor.fetchall():
-                file_vec = row['vector']
-                sim = cosine_similarity(query_vec, file_vec)
-                if sim > 0.1:
-                    results.append({
-                        'id': row['id'],
-                        'path': row['path'],
-                        'text': row['extracted_text'] or "",
-                        'summary': row['summary'] or "",
-                        'similarity': sim
-                    })
+            for file_record, score in hybrid_results:
+                results.append({
+                    'id': file_record.id,
+                    'path': file_record.path,
+                    'text': file_record.extracted_text or "",
+                    'summary': file_record.summary or "",
+                    'similarity': score
+                })
 
-            results.sort(key=lambda x: x['similarity'], reverse=True)
+            # Step 3: Rerank with cross-encoder (if available)
+            if self.reranker and self.reranker.is_available and len(results) > 1:
+                # Prepare documents for reranking (use summary or text)
+                docs_with_meta = []
+                for r in results:
+                    doc_text = r['summary'] or r['text'][:500]  # Truncate for reranker
+                    if doc_text:
+                        docs_with_meta.append((doc_text, r))
+
+                if docs_with_meta:
+                    reranked = self.reranker.rerank_with_metadata(
+                        query=query,
+                        documents=docs_with_meta,
+                        top_k=limit
+                    )
+
+                    # Rebuild results from reranked order
+                    results = []
+                    for rr in reranked:
+                        meta = rr.metadata
+                        meta['similarity'] = rr.score  # Use reranker score
+                        results.append(meta)
+
+                    logger.debug(f"Reranked {len(docs_with_meta)} candidates to {len(results)}")
+
             return results[:limit]
 
         except Exception as e:
-            logger.error(f"Embedding search failed: {e}")
+            logger.error(f"Hybrid search failed: {e}")
             return self._text_search_files(query, limit)
 
     def _text_search_files(self, query: str, limit: int) -> List[Dict]:

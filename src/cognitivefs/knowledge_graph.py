@@ -20,11 +20,14 @@ import time
 import json
 import sqlite3
 import hashlib
+import logging
 from typing import Optional, List, Dict, Any, Tuple
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 import struct
+
+logger = logging.getLogger(__name__)
 
 
 class EntityType(Enum):
@@ -482,6 +485,125 @@ class KnowledgeGraph:
             LIMIT ?
         """, (query, limit))
         return [self._row_to_file(row) for row in cursor.fetchall()]
+
+    # ==================== Hybrid Search (Phase 1 RAG Improvement) ====================
+
+    def bm25_search(self, query: str, limit: int = 20) -> List[Tuple[int, float]]:
+        """
+        BM25 keyword search using SQLite FTS5.
+
+        Args:
+            query: Search query
+            limit: Maximum results
+
+        Returns:
+            List of (file_id, bm25_score) tuples, higher score = better match
+        """
+        cursor = self.conn.cursor()
+
+        # FTS5 bm25() returns negative scores (closer to 0 = better match)
+        # We negate it so higher = better
+        try:
+            cursor.execute("""
+                SELECT f.id, -bm25(files_fts) as score
+                FROM files f
+                JOIN files_fts fts ON f.id = fts.rowid
+                WHERE files_fts MATCH ?
+                ORDER BY score DESC
+                LIMIT ?
+            """, (query, limit))
+            return [(row['id'], row['score']) for row in cursor.fetchall()]
+        except sqlite3.OperationalError as e:
+            # Handle FTS5 query syntax errors gracefully
+            logger.debug(f"BM25 search failed for query '{query}': {e}")
+            return []
+
+    def semantic_search(self, query_embedding: bytes, limit: int = 20,
+                       threshold: float = 0.1) -> List[Tuple[int, float]]:
+        """
+        Semantic search using cosine similarity on embeddings.
+
+        Args:
+            query_embedding: Query vector as packed bytes
+            limit: Maximum results
+            threshold: Minimum similarity threshold
+
+        Returns:
+            List of (file_id, similarity) tuples, higher = better match
+        """
+        from .embedder import cosine_similarity
+
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            SELECT f.id, e.vector
+            FROM files f
+            JOIN embeddings e ON f.embedding_id = e.id
+            WHERE e.vector IS NOT NULL
+        """)
+
+        results = []
+        for row in cursor.fetchall():
+            sim = cosine_similarity(query_embedding, row['vector'])
+            if sim > threshold:
+                results.append((row['id'], sim))
+
+        # Sort by similarity descending
+        results.sort(key=lambda x: x[1], reverse=True)
+        return results[:limit]
+
+    def hybrid_search(self, query: str, query_embedding: bytes = None,
+                     limit: int = 10, alpha: float = 0.5,
+                     rrf_k: int = 60) -> List[Tuple[FileRecord, float]]:
+        """
+        Hybrid search combining BM25 keyword search with semantic search.
+
+        Uses Reciprocal Rank Fusion (RRF) to combine results from both methods.
+        RRF score = sum(1 / (k + rank)) for each result list.
+
+        Args:
+            query: Search query text
+            query_embedding: Optional pre-computed query embedding
+            limit: Maximum results to return
+            alpha: Weight for semantic vs BM25 (0.5 = equal weight)
+            rrf_k: RRF constant (default 60, higher = smoother fusion)
+
+        Returns:
+            List of (FileRecord, combined_score) tuples sorted by score
+        """
+        from collections import defaultdict
+
+        # 1. BM25 keyword search
+        bm25_results = self.bm25_search(query, limit * 2)
+
+        # 2. Semantic search (if embedding provided)
+        semantic_results = []
+        if query_embedding:
+            semantic_results = self.semantic_search(query_embedding, limit * 2)
+
+        # 3. Reciprocal Rank Fusion
+        rrf_scores = defaultdict(float)
+
+        # Add BM25 scores with weight (1 - alpha)
+        for rank, (file_id, _) in enumerate(bm25_results):
+            rrf_scores[file_id] += (1 - alpha) * (1 / (rrf_k + rank + 1))
+
+        # Add semantic scores with weight alpha
+        for rank, (file_id, _) in enumerate(semantic_results):
+            rrf_scores[file_id] += alpha * (1 / (rrf_k + rank + 1))
+
+        # 4. Sort by combined RRF score
+        sorted_ids = sorted(rrf_scores.items(), key=lambda x: x[1], reverse=True)
+
+        # 5. Fetch full file records
+        results = []
+        for file_id, score in sorted_ids[:limit]:
+            cursor = self.conn.cursor()
+            cursor.execute("SELECT * FROM files WHERE id = ?", (file_id,))
+            row = cursor.fetchone()
+            if row:
+                results.append((self._row_to_file(row), score))
+
+        return results
 
     def get_recent_files(self, limit: int = 20) -> List[FileRecord]:
         """Get recently modified files."""
