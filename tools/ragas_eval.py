@@ -39,7 +39,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 try:
     import pandas as pd
     from ragas import evaluate
-    from ragas.llms import llm_factory
+    from ragas.llms import LangchainLLMWrapper
+    from ragas.embeddings import LangchainEmbeddingsWrapper
     from ragas.metrics import (
         faithfulness,
         answer_relevancy,
@@ -47,6 +48,7 @@ try:
         context_recall,
     )
     from ragas.dataset_schema import SingleTurnSample, EvaluationDataset
+    from langchain_ollama import ChatOllama, OllamaEmbeddings
     RAGAS_AVAILABLE = True
 except ImportError as e:
     RAGAS_AVAILABLE = False
@@ -243,17 +245,30 @@ def run_ragas_evaluation(results: List[Dict], output_path: str) -> Dict:
 
     dataset = EvaluationDataset(samples=ragas_samples)
 
-    # Configure Ollama as the evaluator LLM
+    # Configure Ollama as the evaluator LLM using LangChain wrapper
+    evaluator_llm = None
+    evaluator_embeddings = None
     try:
-        evaluator_llm = llm_factory(
+        # Create ChatOllama instance
+        chat_ollama = ChatOllama(
             model=model,
-            provider="ollama",
-            base_url=base_url
+            base_url=base_url,
+            temperature=0.0,  # Deterministic for evaluation
         )
+        # Wrap with RAGAS LangchainLLMWrapper
+        evaluator_llm = LangchainLLMWrapper(chat_ollama)
+
+        # Also create embeddings wrapper for context metrics
+        ollama_embeddings = OllamaEmbeddings(
+            model=model,
+            base_url=base_url,
+        )
+        evaluator_embeddings = LangchainEmbeddingsWrapper(ollama_embeddings)
+
+        print(f"  LLM wrapper created successfully")
     except Exception as e:
-        print(f"ERROR: Failed to create Ollama LLM: {e}")
+        print(f"ERROR: Failed to create Ollama LLM wrapper: {e}")
         print("Falling back to metrics without LLM-as-judge...")
-        evaluator_llm = None
 
     # Select metrics based on LLM availability
     if evaluator_llm:
@@ -267,7 +282,8 @@ def run_ragas_evaluation(results: List[Dict], output_path: str) -> Dict:
         eval_results = evaluate(
             dataset=dataset,
             metrics=metrics,
-            llm=evaluator_llm
+            llm=evaluator_llm,
+            embeddings=evaluator_embeddings,
         )
 
         # Convert to dict

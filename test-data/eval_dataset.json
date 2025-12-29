@@ -1,62 +1,62 @@
 [
   {
     "user_input": "What is CognitiveFS and what are its main features?",
-    "reference": "CognitiveFS is an AI-native FUSE filesystem that combines traditional file storage with knowledge graph capabilities. Key features include automatic knowledge extraction from files, semantic search via embeddings, entity recognition (people, organizations, concepts), and a virtual .ai directory for AI-powered queries.",
-    "expected_contexts": ["README", "IMPLEMENTATION"],
+    "reference": "CognitiveFS is an AI-native filesystem built on FUSE that provides semantic search and knowledge graph capabilities. Key features include semantic file search using natural language queries, automatic content extraction and indexing, knowledge graph with entity relationships, and vector embeddings for similarity search.",
+    "expected_contexts": ["cognitivefs_overview", "semantic_search"],
     "category": "overview"
   },
   {
     "user_input": "How does the knowledge graph store and organize information?",
-    "reference": "The knowledge graph uses SQLite for storage with tables for files, entities, relationships, and embeddings. Files are indexed with extracted text, summaries, and entity references. Entities are linked through relationships with types like mentions, contains, and related_to.",
-    "expected_contexts": ["knowledge_graph"],
+    "reference": "The KnowledgeGraph class provides core storage and retrieval functionality. It supports file operations (add_file, get_file, search_files, delete_file), entity operations (add_entity, get_entities, link_file_entity), and query methods (query_with_context, find_related_files). The architecture uses SQLite-backed storage.",
+    "expected_contexts": ["knowledge_graph_api", "cognitivefs_overview"],
     "category": "architecture"
   },
   {
-    "user_input": "What LLM models does CognitiveFS support for queries?",
-    "reference": "CognitiveFS integrates with Ollama for local LLM inference. The default model is qwen2.5:3b. The OllamaClient connects to localhost:11434 and supports generate() and chat() methods for queries and conversations.",
-    "expected_contexts": ["llm"],
-    "category": "configuration"
-  },
-  {
-    "user_input": "How do I mount a CognitiveFS filesystem?",
-    "reference": "Use the CLI command: python -m cognitivefs mount <device> <mountpoint>. The device can be an image file or block device. Add --debug for verbose logging. On Windows, use a drive letter like K: as the mountpoint.",
-    "expected_contexts": ["__main__", "mount"],
+    "user_input": "How do I install and set up CognitiveFS?",
+    "reference": "Prerequisites are Python 3.8+, FUSE support (fuse3 on Linux), and SQLite3. Installation steps: clone the repository, install dependencies with pip install -r requirements.txt, format a device with python -m cognitivefs format, and mount with python -m cognitivefs mount. Docker setup is also available.",
+    "expected_contexts": ["installation_guide"],
     "category": "usage"
   },
   {
-    "user_input": "What virtual files are available in the .ai directory?",
-    "reference": "The .ai directory provides virtual endpoints including: /query/<question> for natural language queries, /search/<term> for semantic search, /summary/<file> for AI summaries, /related/<file> for finding related files, /by-topic/ for topic-based organization, and /entities/ for browsing extracted entities.",
-    "expected_contexts": ["virtual_ai"],
+    "user_input": "How do I mount a CognitiveFS filesystem?",
+    "reference": "Mount the filesystem using: python -m cognitivefs mount /path/to/device /mnt/point. First clone the repository and install dependencies. The device should be formatted first with python -m cognitivefs format /path/to/device.",
+    "expected_contexts": ["installation_guide", "cognitivefs_overview"],
+    "category": "usage"
+  },
+  {
+    "user_input": "How does semantic search work in CognitiveFS?",
+    "reference": "Semantic search uses vector embeddings and NLP. The process involves: Content Extraction (text from files), Embedding Generation (text to vectors), Indexing (embeddings in knowledge graph), and Query Processing (query embedding compared to stored embeddings). Architecture includes sentence-transformers and optional FAISS for vector similarity.",
+    "expected_contexts": ["semantic_search", "research_ideas"],
     "category": "features"
   },
   {
     "user_input": "How does CognitiveFS extract entities from files?",
-    "reference": "The extractor module uses regex patterns to identify entity types including: person names, organizations, email addresses, URLs, dates, phone numbers, and file paths. Entities are stored in the knowledge graph with source references and confidence scores.",
-    "expected_contexts": ["extractor"],
+    "reference": "CognitiveFS automatically extracts named entities using two methods: regex patterns for structured data (emails, dates, URLs) and NER models for unstructured text (optional spaCy integration). Supported entity types include PERSON, EMAIL, DATE, ORGANIZATION, LOCATION, and URL. Entities are linked to files through the file_entities table.",
+    "expected_contexts": ["entity_extraction"],
     "category": "architecture"
   },
   {
-    "user_input": "What is the disk format used by CognitiveFS?",
-    "reference": "CognitiveFS uses a custom disk format with a superblock (magic COGFS001), allocation bitmap, inode table, and dedicated regions for the knowledge graph, embedding store, version store, and data blocks. Block size is 4KB with 512-byte sector alignment.",
-    "expected_contexts": ["diskformat", "blockdev"],
-    "category": "architecture"
+    "user_input": "What entity types does CognitiveFS recognize?",
+    "reference": "Supported entity types are: PERSON (people's names like Alice Johnson), EMAIL (email addresses), DATE (dates in various formats), ORGANIZATION (company and org names), LOCATION (geographic locations), and URL (web addresses).",
+    "expected_contexts": ["entity_extraction"],
+    "category": "features"
   },
   {
     "user_input": "How do embeddings work in the semantic search?",
-    "reference": "Embeddings are generated using sentence-transformers with the all-MiniLM-L6-v2 model (384 dimensions). File content is embedded and stored in the knowledge graph. Search queries are embedded and compared using cosine similarity to find relevant files.",
-    "expected_contexts": ["embedder"],
+    "reference": "Text is converted to vector embeddings using sentence-transformers. These embeddings are stored in the knowledge graph and optionally indexed with FAISS for similarity search. User queries are also embedded and compared against stored embeddings to find relevant files.",
+    "expected_contexts": ["semantic_search", "research_ideas"],
     "category": "features"
   },
   {
-    "user_input": "What background processing does CognitiveFS perform?",
-    "reference": "The SyncProcessor handles background knowledge extraction. When files are created or modified, they are queued for processing. The processor extracts text content, generates embeddings, identifies entities, and updates the knowledge graph.",
-    "expected_contexts": ["processor"],
-    "category": "architecture"
+    "user_input": "What improvements are being considered for CognitiveFS?",
+    "reference": "Potential improvements include: advanced embedding models (E5-large, multilingual support), graph neural networks for relationship prediction, query understanding improvements (query expansion, boolean queries), and performance optimizations (embedding caching, FAISS/ScaNN for approximate nearest neighbors).",
+    "expected_contexts": ["research_ideas"],
+    "category": "roadmap"
   },
   {
-    "user_input": "How does relationship detection work between entities?",
-    "reference": "The relationship detector identifies connections between entities through: co-occurrence in files, semantic similarity via embeddings, explicit references in content, and shared context. Relationships are typed (mentions, related_to, contains) with confidence scores.",
-    "expected_contexts": ["relationship_detector"],
-    "category": "features"
+    "user_input": "What was discussed in the team meeting?",
+    "reference": "The December 20, 2024 meeting with Alice Johnson, Bob Smith, and Carol Davis covered: CognitiveFS progress (knowledge graph complete, RAGAS evaluation added, Docker environment working), next steps (improve search accuracy, add entity types, performance optimization), and action items for documentation, RAGAS review, and CI/CD pipeline.",
+    "expected_contexts": ["meeting_2024_12_20"],
+    "category": "project"
   }
 ]
