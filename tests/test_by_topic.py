@@ -74,7 +74,8 @@ def test_readdir_by_topic():
     handler = VirtualAIHandler()
 
     # Without knowledge graph, should return empty list or uncategorized
-    topics = handler._readdir_by_topic("")
+    # Access via the topic handler
+    topics = handler.topic.readdir("", ["by-topic"])
     assert isinstance(topics, list), f"Expected list, got {type(topics)}"
 
     print(f"[OK] readdir tests passed (topics: {topics})")

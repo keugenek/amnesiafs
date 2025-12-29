@@ -53,44 +53,47 @@ python tools/mount.py test-data/test.img K: --debug
 
 ## Features
 
-### ✅ Fully Working
+### ✅ Core System
 - **Knowledge Graph**: SQLite + FTS5 with entities, relationships, embeddings
 - **Entity Extraction**: 10 types (PERSON, ORG, LOCATION, DATE, etc.) via regex
-- **Semantic Search**: Embedding-based similarity with BAAI/bge models
+- **Semantic Search**: Embedding-based similarity with BAAI/bge-base-en-v1.5 (768d, CUDA)
 - **Text Extraction**: 30+ file types including JSON, CSV, YAML parsing
 - **Background Processing**: Async file analysis on write
-- **Virtual AI Directory**: `.ai/` folder with query, status, search, entities
-- **Dual-View Files**: Auto-generated `_DASHBOARD.html`, `_manifest.md`, `_index.json` in each `.ai/` folder
-- **Transparent Version Control**: Git-backed versioning of all files with LFS support
+- **Transparent Version Control**: Git-backed versioning with LFS support
 
-### ⚠️ Partial/Basic
+### ✅ Virtual AI Directory (`.ai/`)
+- **status/**: System status with file counts, entity stats, queue status
+- **search/**: Full-text search with snippets and highlighting
+- **query/**: Async LLM queries (requires Ollama)
+- **entities/**: Browse extracted entities by type
+- **similar/**: Embedding-based similarity search
+- **versions/**: Browse git history, view diffs, access file versions
+- **Dual-View Files**: `_DASHBOARD.html`, `_manifest.md`, `_index.json` in each folder
+
+### ⚠️ Basic/Limited
 - **Topic Clustering**: Infrastructure exists, limited auto-population
-- **Related Files**: Shows similar files but basic implementation
-- **LLM Queries**: Works with Ollama but requires external setup
+- **Related Files**: Shows similar files, basic ranking
+- **Chat Sessions**: Infrastructure only
 
-### ❌ Not Yet Implemented
-- **LLM Summaries**: Disabled for stability (shows file preview only)
-- **Multi-Modal**: No image/video/audio processing yet
-- **Graph Visualization**: Returns help text only
+### ❌ Not Implemented
+- **Multi-Modal**: No image/video/audio processing
+- **Agentic R/W/Transform**: No agent-driven modifications
+- **Self-Organization**: No background restructuring agents
 
 ## Virtual AI Paths (`.ai/`)
 
 When mounted, browse `K:\.ai\` for AI-powered virtual directories:
 
-| Path | Status | Description |
-|------|--------|-------------|
-| `.ai/status/` | ✅ Working | System status JSON (files, entities, queue) |
-| `.ai/query/<question>` | ✅ Working | Async LLM query (requires Ollama) |
-| `.ai/search/<text>` | ✅ Working | Full-text search with snippets |
-| `.ai/entities/` | ✅ Working | List all extracted entities |
-| `.ai/related/<file>` | ⚠️ Basic | Find similar files by embedding |
-| `.ai/similar/<file>` | ⚠️ Basic | Embedding similarity search |
-| `.ai/summary/<file>` | ❌ Disabled | Shows preview only (LLM disabled) |
-| `.ai/by-topic/` | ⚠️ Basic | Topic clusters (limited) |
-| `.ai/by-date/` | ❌ Stub | Not fully implemented |
-| `.ai/chat/` | ⚠️ Basic | Session handling infrastructure |
-| `.ai/graph/` | ❌ Stub | Returns help text only |
-| `.ai/versions/` | ✅ Working | Browse git version history, diffs, file at version |
+| Path | Description |
+|------|-------------|
+| `.ai/status/` | System status (files, entities, queue) |
+| `.ai/search/<text>` | Full-text search with snippets |
+| `.ai/query/<question>` | Async LLM query (requires Ollama) |
+| `.ai/entities/` | Browse extracted entities by type |
+| `.ai/similar/<file>` | Find files by embedding similarity |
+| `.ai/versions/` | Git history, diffs, file versions |
+| `.ai/graph/` | Knowledge graph queries, entity connections |
+| `.ai/by-topic/` | Files organized by semantic topic clusters |
 
 **Example usage:**
 ```powershell
@@ -278,3 +281,19 @@ pip install sentence-transformers  # ~1GB download
 - **Windows**: WinFsp + fusepy (primary target)
 - **Linux**: Native FUSE
 - **macOS**: macFUSE + fusepy
+
+## Roadmap
+
+### Completed
+- ✅ Split `virtual_ai.py` into modular handlers (8 handlers: status, search, query, versions, entities, similar, graph, topic)
+
+### Next
+- Improve RAG quality (hybrid search, reranking)
+- Extract remaining handlers (summary, related, chat, by-date)
+
+### Future
+- **Zero-config discovery**: `/.ai/insights/` with auto-clusters, duplicates, outliers, hubs
+- Code-aware entity filtering
+- Multi-modal processing (images, audio)
+
+**Note:** Use `.ai/` paths for discovery, grep/AST tools for precision.
