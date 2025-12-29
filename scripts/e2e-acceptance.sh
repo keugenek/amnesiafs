@@ -44,9 +44,9 @@ log_info "Python: $(python --version)"
 # Create mount point
 mkdir -p "$MOUNT_POINT"
 
-# Format test image
+# Format test image (100MB)
 log_info "Formatting test image..."
-python tools/format_device.py "$TEST_IMG" --force > /dev/null || {
+python tools/format_device.py "$TEST_IMG" --force --size 100M > /dev/null || {
     log_fail "Failed to format test image"
     exit 1
 }

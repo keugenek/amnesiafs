@@ -24,10 +24,11 @@ RUN pip install --no-cache-dir -r /workspace/requirements.txt
 COPY requirements-eval.txt /workspace/
 RUN pip install --no-cache-dir -r /workspace/requirements-eval.txt
 
-# Copy source code
+# Copy source code and scripts
 COPY src /workspace/src
 COPY tools /workspace/tools
 COPY tests /workspace/tests
+COPY scripts /workspace/scripts
 
 # Default to bash for interactive use, override with --entrypoint for scripts
 CMD ["bash"]

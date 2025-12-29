@@ -36,6 +36,13 @@ jobs:
     needs: unit-tests  # Only run if unit tests pass
 
     steps:
+      - name: Free disk space
+        run: |
+          # Remove unnecessary packages to free up space
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
+          sudo apt-get clean
+          df -h
+
       - name: Checkout
         uses: actions/checkout@v4
 
