@@ -7,10 +7,11 @@ without blocking filesystem operations.
 """
 
 import os
+import re
 import time
 import threading
 import logging
-from typing import Optional, Callable, Any
+from typing import Optional, Callable, Any, Set
 from queue import Queue, Empty
 
 from .knowledge_graph import KnowledgeGraph, FileRecord, Entity, EntityType, Embedding
@@ -38,6 +39,85 @@ ENTITY_TYPE_MAP = {
     ExtractedEntityType.COLUMN: EntityType.COLUMN,
     ExtractedEntityType.SCHEMA_TYPE: EntityType.SCHEMA_TYPE,
 }
+
+# Directories to ignore during indexing (version control, build artifacts, etc.)
+IGNORED_DIRECTORIES: Set[str] = {
+    '.git',
+    '.hg',
+    '.svn',
+    '.bzr',
+    'node_modules',
+    '__pycache__',
+    '.pytest_cache',
+    '.mypy_cache',
+    '.tox',
+    '.nox',
+    '.eggs',
+    '*.egg-info',
+    '.venv',
+    'venv',
+    'env',
+    '.env',
+    'dist',
+    'build',
+    '.cache',
+    '.idea',
+    '.vscode',
+    '.DS_Store',
+}
+
+# File patterns to ignore (compiled, temp, lock files)
+IGNORED_FILE_PATTERNS: Set[str] = {
+    r'\.pyc$',
+    r'\.pyo$',
+    r'\.class$',
+    r'\.o$',
+    r'\.so$',
+    r'\.dll$',
+    r'\.exe$',
+    r'\.dylib$',
+    r'\.lock$',
+    r'-lock\.json$',
+    r'\.log$',
+    r'\.tmp$',
+    r'\.temp$',
+    r'\.swp$',
+    r'\.swo$',
+    r'~$',
+    r'^\.#',
+    r'#.*#$',
+}
+
+# Compiled regex patterns for file matching
+_IGNORED_FILE_REGEXES = [re.compile(p) for p in IGNORED_FILE_PATTERNS]
+
+
+def should_ignore_path(path: str) -> bool:
+    """
+    Check if a file path should be ignored for indexing.
+
+    Args:
+        path: File path to check
+
+    Returns:
+        True if the path should be ignored, False otherwise
+    """
+    # Normalize path separators
+    normalized = path.replace('\\', '/')
+
+    # Check each path component against ignored directories
+    parts = normalized.split('/')
+    for part in parts:
+        if part in IGNORED_DIRECTORIES:
+            return True
+
+    # Check filename against ignored patterns
+    filename = parts[-1] if parts else ''
+    for regex in _IGNORED_FILE_REGEXES:
+        if regex.search(filename):
+            return True
+
+    return False
 
 
 class BackgroundProcessor:
@@ -124,11 +204,19 @@ class BackgroundProcessor:
         The file is added to both the internal queue (for immediate processing)
         and the database queue (for persistence).
 
+        Files in ignored directories (.git, node_modules, etc.) or matching
+        ignored patterns (.pyc, .log, etc.) are skipped.
+
         Args:
             path: File path
             inode_num: Inode number
             data: File content
         """
+        # Skip ignored files (version control, build artifacts, etc.)
+        if should_ignore_path(path):
+            logger.debug(f"Skipping ignored file: {path}")
+            return
+
         logger.debug(f"Queuing file for processing: {path}")
 
         # Add to internal queue for immediate processing
@@ -413,5 +501,7 @@ class SyncProcessor:
         pass
 
     def queue_file(self, path: str, inode_num: int, data: bytes):
-        """Process file immediately."""
+        """Process file immediately (skip ignored files)."""
+        if should_ignore_path(path):
+            return
         self.process_file(path, inode_num, data)
