@@ -60,10 +60,11 @@ class EntitiesHandler(BaseHandler):
 
     def read(self, target_path: str, parts: List[str]) -> bytes:
         """
-        Show entities extracted from a specific file.
+        Show entity details or entities extracted from a specific file.
 
         Usage:
             cat /.ai/entities/_help.txt              - Show help
+            cat /.ai/entities/concept/FIELD          - Show details for FIELD entity
             cat /.ai/entities/path/to/file.md        - Show entities from file
         """
         if not target_path:
@@ -71,6 +72,26 @@ class EntitiesHandler(BaseHandler):
 
         if target_path == "_help.txt":
             return self._get_entities_help()
+
+        # Check if this is an entity type + entity name query
+        path_parts = target_path.strip('/').split('/')
+        if len(path_parts) == 2:
+            try:
+                from ..knowledge_graph import EntityType
+                entity_type = EntityType(path_parts[0])
+                raw_name = path_parts[1]
+                # Try original name first (for dates like 2024-01-15)
+                result = self._get_entity_details(entity_type, raw_name)
+                if b"Entity not found" not in result:
+                    return result
+                # Try with underscore->space replacement (for names like "John_Doe")
+                result = self._get_entity_details(entity_type, raw_name.replace('_', ' '))
+                if b"Entity not found" not in result:
+                    return result
+                # Try with dash->slash replacement (for file paths like "src-file.py")
+                return self._get_entity_details(entity_type, raw_name.replace('_', ' ').replace('-', '/'))
+            except (ValueError, ImportError):
+                pass  # Not a valid entity type, fall through to file entities
 
         return self._get_file_entities(target_path)
 
@@ -104,6 +125,46 @@ Show entities extracted from a specific file:
 - cat /.ai/search/<query>       - Search for entities/files
 """
         return help_text.encode('utf-8')
+
+    def _get_entity_details(self, entity_type, entity_name: str) -> bytes:
+        """Get details about a specific entity."""
+        if not self.knowledge_graph:
+            return b"Knowledge graph not initialized.\n"
+
+        # Find the entity using correct API: get_entity(type, name)
+        entity = self.knowledge_graph.get_entity(entity_type, entity_name)
+
+        if not entity:
+            return f"Entity not found: {entity_name}\n".encode('utf-8')
+
+        lines = [
+            f"# Entity: {entity.name}",
+            f"Type: {entity.entity_type.value}",
+            ""
+        ]
+
+        if entity.description:
+            lines.extend(["## Description", entity.description, ""])
+
+        # Get files that mention this entity (returns List[FileRecord])
+        related_files = self.knowledge_graph.get_entity_files(entity.id)
+        if related_files:
+            lines.append(f"## Found in Files ({len(related_files)})")
+            for file_record in related_files[:20]:
+                lines.append(f"  - {file_record.path}")
+            if len(related_files) > 20:
+                lines.append(f"  ... and {len(related_files) - 20} more")
+            lines.append("")
+
+        # Get related entities (returns List[Entity])
+        related = self.knowledge_graph.get_related_entities(entity.id, depth=1)
+        if related:
+            lines.append(f"## Related Entities ({len(related)})")
+            for rel_entity in related[:10]:
+                lines.append(f"  - {rel_entity.name} ({rel_entity.entity_type.value})")
+            lines.append("")
+
+        return "\n".join(lines).encode('utf-8')
 
     def _get_file_entities(self, file_path: str) -> bytes:
         """Get entities extracted from a specific file."""
