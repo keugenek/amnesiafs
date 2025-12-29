@@ -9,6 +9,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         fuse3 \
+        libfuse2 \
         curl \
         jq \
     && rm -rf /var/lib/apt/lists/*
@@ -28,4 +29,5 @@ COPY src /workspace/src
 COPY tools /workspace/tools
 COPY tests /workspace/tests
 
-ENTRYPOINT ["bash"]
+# Default to bash for interactive use, override with --entrypoint for scripts
+CMD ["bash"]
