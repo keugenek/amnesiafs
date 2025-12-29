@@ -139,7 +139,8 @@ The dashboard includes:
 All file changes are automatically versioned using git under the hood:
 
 ```powershell
-# Version control repo created at: test.vcs/ (alongside test.img)
+# Version control repo stored alongside the image file
+# test.img → test.vcs/  (git repository)
 # Every write, rename, delete is tracked automatically
 # Large files (>10MB) use Git LFS
 ```
@@ -151,8 +152,19 @@ All file changes are automatically versioned using git under the hood:
 
 **What's NOT versioned:**
 - `.ai/` paths (virtual, computed on-the-fly)
+- `.vcs/` paths (version control metadata)
 
-The git repo is stored at `<image>.vcs/` (e.g., `test.vcs/` for `test.img`).
+**Storage locations:**
+- Image file: `test.vcs/` alongside `test.img`
+- Physical device: `~/.cognitivefs/repos/<uuid>/`
+
+**Remote sync** (optional):
+```powershell
+# Add a remote to sync version history
+cd C:\Users\admin\amnesiafs\test.vcs
+git remote add origin https://github.com/user/my-brain-backup.git
+git push -u origin master
+```
 
 ## Project Structure
 

@@ -106,16 +106,18 @@ class CognitiveFS(Operations):
     Implements a FUSE filesystem with AI-native features.
     """
 
-    def __init__(self, device_path: str, debug: bool = False):
+    def __init__(self, device_path: str, debug: bool = False, mount_point: str = None):
         """
         Initialize CognitiveFS.
 
         Args:
             device_path: Path to block device
             debug: Enable debug logging
+            mount_point: Mount point path (for version control storage)
         """
         self.device_path = device_path
         self.debug = debug
+        self.mount_point = mount_point  # For version control repo location
         self.device: Optional[BlockDevice] = None
         self.superblock: Optional[Superblock] = None
         self.bitmap: Optional[AllocationBitmap] = None
@@ -150,6 +152,8 @@ class CognitiveFS(Operations):
 
     def init(self, path):
         """Initialize filesystem on mount."""
+        # Note: 'path' from FUSE is "/" not the actual mount point
+        # self.mount_point is already set from __init__ with the real mount path
         self._log(f"Mounting CognitiveFS from {self.device_path}")
 
         # Get device size via WMI first (Windows)
@@ -243,12 +247,22 @@ class CognitiveFS(Operations):
         self._init_processor()
 
     def _init_version_control(self):
-        """Initialize git-based version control storage."""
+        """Initialize git-based version control storage.
+
+        The git repo is stored alongside the image file (e.g., test.vcs for test.img)
+        or in ~/.cognitivefs/repos/<uuid> for physical devices.
+
+        Users can access version history via the virtual path /.ai/versions/
+        """
+        # Store version control alongside image file or in user data dir
+        # Note: Can't store inside the mount during init() as mount isn't ready yet
         if self.device_path.endswith('.img'):
             repo_path = self.device_path.replace('.img', '.vcs')
         else:
             uuid_hex = self.superblock.uuid.hex()
             repo_path = os.path.join(os.path.expanduser('~'), '.cognitivefs', 'repos', uuid_hex)
+
+        self._log(f"Version control repo at: {repo_path}")
 
         self.version_control = GitVersionControl(repo_path, self._log)
         self.version_control.init_repo()
@@ -1032,8 +1046,9 @@ class CognitiveFS(Operations):
 
     def _queue_for_extraction(self, path: str, inode_num: int):
         """Queue file for knowledge extraction."""
-        # Skip virtual /.ai/ paths
-        if path.startswith('/.ai/') or path.startswith('\\.ai\\'):
+        # Skip virtual /.ai/ paths and version control /.vcs/ paths
+        excluded_prefixes = ('/.ai/', '\\.ai\\', '/.vcs/', '\\.vcs\\', '.ai/', '.vcs/')
+        if any(path.startswith(prefix) for prefix in excluded_prefixes):
             return
 
         # Skip if no processor
@@ -1141,7 +1156,7 @@ def mount_cognitivefs(device_path: str, mount_point: str, debug: bool = False, f
         os.makedirs(mount_point, exist_ok=True)
 
     # Create FUSE operations
-    operations = CognitiveFS(device_path, debug=debug)
+    operations = CognitiveFS(device_path, debug=debug, mount_point=mount_point)
 
     # Mount
     print(f"Mounting {device_path} at {mount_point}...")

@@ -1,8 +1,10 @@
 ﻿"""
 Git-based version control integration for CognitiveFS.
 
-Stores filesystem snapshots in a git repository and uses git LFS
-for large files when available.
+Stores filesystem snapshots in a git repository inside the mounted volume
+at /.vcs/. Uses git LFS for large files when available.
+
+Supports syncing to external remotes (GitHub, GitLab, etc.) via config.
 """
 
 from __future__ import annotations
@@ -10,7 +12,7 @@ from __future__ import annotations
 import os
 import subprocess
 from pathlib import Path
-from typing import Iterable, Optional
+from typing import Iterable, Optional, Dict, Any
 
 
 class GitVersionControl:
@@ -18,17 +20,22 @@ class GitVersionControl:
 
     DEFAULT_LFS_THRESHOLD_BYTES = 10 * 1024 * 1024
 
+    # Paths to exclude from version control (prevent infinite loops)
+    EXCLUDED_PREFIXES = ('.ai/', '.vcs/', '.vcs\\')
+
     def __init__(
         self,
         repo_path: str,
         logger,
         lfs_threshold_bytes: int = DEFAULT_LFS_THRESHOLD_BYTES,
+        remote_config: Dict[str, Any] = None,
     ) -> None:
         self.repo_path = Path(repo_path)
         self.logger = logger
         self.lfs_threshold_bytes = lfs_threshold_bytes
         self.enabled = False
         self.lfs_available = False
+        self.remote_config = remote_config or {}
 
     def init_repo(self) -> None:
         """Initialize the git repository if possible."""
@@ -133,15 +140,91 @@ class GitVersionControl:
             self._run_git(["add", ".gitattributes"], check=False)
 
     def _relative_path(self, path: str) -> Optional[str]:
-        """Convert a filesystem path to a safe repo-relative path."""
+        """Convert a filesystem path to a safe repo-relative path.
+
+        Returns None for excluded paths (.ai/, .vcs/) to prevent infinite loops.
+        """
         cleaned = path.replace("\\", "/")
         cleaned = cleaned.lstrip("/")
-        if not cleaned or cleaned.startswith(".ai/"):
+
+        # Check against excluded prefixes
+        if not cleaned:
             return None
+        for prefix in self.EXCLUDED_PREFIXES:
+            if cleaned.startswith(prefix) or cleaned == prefix.rstrip('/'):
+                return None
+
         parts = [part for part in cleaned.split("/") if part and part != "."]
         if any(part == ".." for part in parts):
             return None
         return "/".join(parts)
+
+    # ========== Remote Sync Methods ==========
+
+    def add_remote(self, name: str, url: str) -> bool:
+        """Add a git remote for syncing."""
+        result = self._run_git(["remote", "add", name, url], check=False)
+        if result.returncode == 0:
+            self.logger(f"Added remote '{name}': {url}")
+            return True
+        # Remote might already exist, try to update it
+        result = self._run_git(["remote", "set-url", name, url], check=False)
+        return result.returncode == 0
+
+    def remove_remote(self, name: str) -> bool:
+        """Remove a git remote."""
+        result = self._run_git(["remote", "remove", name], check=False)
+        return result.returncode == 0
+
+    def list_remotes(self) -> Dict[str, str]:
+        """List all configured remotes."""
+        result = self._run_git(["remote", "-v"], check=False)
+        remotes = {}
+        if result.returncode == 0:
+            for line in result.stdout.strip().split('\n'):
+                if line and '(fetch)' in line:
+                    parts = line.split()
+                    if len(parts) >= 2:
+                        remotes[parts[0]] = parts[1]
+        return remotes
+
+    def push(self, remote: str = "origin", branch: str = "master", force: bool = False) -> bool:
+        """Push to remote repository."""
+        args = ["push", remote, branch]
+        if force:
+            args.insert(1, "--force")
+        result = self._run_git(args, check=False)
+        if result.returncode == 0:
+            self.logger(f"Pushed to {remote}/{branch}")
+            return True
+        self.logger(f"Push failed: {result.stderr}")
+        return False
+
+    def pull(self, remote: str = "origin", branch: str = "master") -> bool:
+        """Pull from remote repository."""
+        result = self._run_git(["pull", remote, branch], check=False)
+        if result.returncode == 0:
+            self.logger(f"Pulled from {remote}/{branch}")
+            return True
+        self.logger(f"Pull failed: {result.stderr}")
+        return False
+
+    def sync_to_remote(self, remote: str = "origin") -> bool:
+        """Sync local changes to remote (commit pending + push)."""
+        self.commit_pending("Auto-sync")
+        return self.push(remote)
+
+    def setup_remote_from_config(self) -> bool:
+        """Setup remote from config if provided."""
+        if not self.remote_config:
+            return False
+
+        url = self.remote_config.get('url')
+        name = self.remote_config.get('name', 'origin')
+
+        if url:
+            return self.add_remote(name, url)
+        return False
 
     def _git_available(self) -> bool:
         return subprocess.run(["git", "--version"], capture_output=True).returncode == 0

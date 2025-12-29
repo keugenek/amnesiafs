@@ -22,3 +22,7 @@ test-data/*.img
 test-data/*.db
 test-data/*.db-shm
 test-data/*.db-wal
+
+# Version control repos (stored alongside image files)
+*.vcs/
+test.vcs/
