@@ -18,6 +18,7 @@ from .knowledge_graph import KnowledgeGraph, FileRecord, Entity, EntityType, Emb
 from .extractor import ContentExtractor, EntityExtractor, extract_all, ExtractedEntityType
 from .embedder import EmbeddingGenerator
 from .relationship_detector import RelationshipDetector
+from .facts_extractor import get_facts_extractor
 
 logger = logging.getLogger(__name__)
 
@@ -162,6 +163,9 @@ class BackgroundProcessor:
 
         # Callbacks
         self._on_file_processed: Optional[Callable[[str, bool], Any]] = None
+
+        # LLM facts extraction (enabled by default)
+        self.facts_extraction_enabled = True
 
     def start(self):
         """Start background processing thread."""

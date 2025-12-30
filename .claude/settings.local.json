@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "WebSearch",
+      "WebFetch(domain:api.github.com)",
+      "WebFetch(domain:github.com)",
+      "Bash(ls:*)",
+      "Bash(docker builder prune:*)",
+      "Bash(docker buildx build:*)",
+      "Bash(PYTHONPATH=src OLLAMA_BASE_URL=http://localhost:11434 RAGAS_MODEL=qwen2.5:14b-instruct-q4_K_M python:*)"
+    ]
+  }
+}
