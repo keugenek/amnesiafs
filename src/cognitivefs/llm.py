@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 # Default Ollama configuration
 OLLAMA_BASE_URL = "http://localhost:11434"
-DEFAULT_MODEL = "qwen2.5:3b"
+DEFAULT_MODEL = "qwen2.5:14b-instruct-q4_K_M"
 
 # Global config storage (loaded from filesystem)
 _llm_config: Dict[str, Any] = {}
