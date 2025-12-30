@@ -14,3 +14,5 @@ datasets>=2.0.0
 
 # Embeddings (for context retrieval evaluation)
 sentence-transformers>=2.2.0
+rouge-score>=0.1.2
+nltk>=3.8.0

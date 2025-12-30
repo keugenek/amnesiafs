@@ -23,7 +23,7 @@ try:
 except ImportError:
     HF_AVAILABLE = False
 
-from cognitivefs.knowledge_graph import KnowledgeGraph
+from cognitivefs.knowledge_graph import KnowledgeGraph, FileRecord
 
 
 def import_ragbench(kg: KnowledgeGraph, subset: str = None, max_docs: int = 100) -> int:
@@ -80,14 +80,19 @@ def import_ragbench(kg: KnowledgeGraph, subset: str = None, max_docs: int = 100)
                 continue
 
             # Index the document
-            kg.upsert_file(
+            now = time.time()
+            record = FileRecord(
                 path=path,
-                inode=None,  # Virtual file
+                inode_num=0,  # Virtual file
                 size=len(ctx),
                 content_hash=content_hash,
                 extracted_text=ctx,
                 summary=ctx[:500] if len(ctx) > 500 else ctx,
+                created_at=now,
+                modified_at=now,
+                indexed_at=now,
             )
+            kg.add_file(record)
             imported += 1
 
             if imported % 10 == 0:
@@ -125,14 +130,19 @@ def import_squad(kg: KnowledgeGraph, max_docs: int = 100) -> int:
         if existing:
             continue
 
-        kg.upsert_file(
+        now = time.time()
+        record = FileRecord(
             path=path,
-            inode=None,
+            inode_num=0,
             size=len(ctx),
             content_hash=content_hash,
             extracted_text=ctx,
             summary=ctx[:500],
+            created_at=now,
+            modified_at=now,
+            indexed_at=now,
         )
+        kg.add_file(record)
         imported += 1
 
         if imported % 10 == 0:
