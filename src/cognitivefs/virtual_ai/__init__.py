@@ -21,6 +21,7 @@ from .related import RelatedHandler
 from .chat import ChatHandler
 from .date import DateHandler
 from .insights import InsightsHandler
+from .facts import FactsHandler
 from ..generators import GeneratorFactory
 
 
@@ -48,6 +49,7 @@ class VirtualAIHandler:
         "chat": VirtualNodeType.CHAT,
         "by-date": VirtualNodeType.DIRECTORY,
         "insights": VirtualNodeType.DIRECTORY,
+        "facts": VirtualNodeType.DIRECTORY,
     }
 
     # Auto-generated dual-view files
@@ -72,6 +74,7 @@ class VirtualAIHandler:
         self.chat = ChatHandler(cognitivefs, None)
         self.date = DateHandler(cognitivefs, None)
         self.insights = InsightsHandler(cognitivefs, None)
+        self.facts = FactsHandler(cognitivefs, None)
 
         # Generator factory for dual-view files
         self._generator_factory = GeneratorFactory(None)
@@ -92,6 +95,7 @@ class VirtualAIHandler:
         self.chat.knowledge_graph = kg
         self.date.knowledge_graph = kg
         self.insights.knowledge_graph = kg
+        self.facts.knowledge_graph = kg
         self._generator_factory.kg = kg
 
     def is_ai_path(self, path: str) -> bool:
@@ -149,6 +153,8 @@ class VirtualAIHandler:
             return self.date.getattr(target_path, parts)
         elif subdir == "insights":
             return self.insights.getattr(target_path, parts)
+        elif subdir == "facts":
+            return self.facts.getattr(target_path, parts)
 
         return None
 
@@ -189,6 +195,8 @@ class VirtualAIHandler:
             entries = self.date.readdir(target_path, parts)
         elif subdir == "insights":
             entries = self.insights.readdir(target_path, parts)
+        elif subdir == "facts":
+            entries = self.facts.readdir(target_path, parts)
 
         # Add generated dual-view files to first-level subdirectories
         if subdir in self.SUBDIRS and not target_path:
@@ -236,6 +244,8 @@ class VirtualAIHandler:
             content = self.date.read(target_path, parts)
         elif subdir == "insights":
             content = self.insights.read(target_path, parts)
+        elif subdir == "facts":
+            content = self.facts.read(target_path, parts)
 
         return content[offset:offset + size]
 
