@@ -230,6 +230,9 @@ class BackgroundProcessor:
     def set_callback(self, on_file_processed: Callable[[str, bool], Any]):
         """Set callback for when a file is processed."""
         self._on_file_processed = on_file_processed
+        
+        # LLM facts extraction (can be slow, disabled by default)
+        self.facts_extraction_enabled = True
 
     def _worker_loop(self):
         """Main worker loop - process queue items."""
@@ -311,10 +314,16 @@ class BackgroundProcessor:
             # Generate embedding
             self._generate_embedding(file_id, result.text)
 
+            # Extract LLM-based facts (if enabled)
+            facts_count = 0
+            if self.facts_extraction_enabled and result.text:
+                facts_count = self._extract_facts(file_id, result.text, path)
+
             success = True
             logger.info(f"Successfully processed {path}: "
                        f"{len(result.entities)} entities, "
                        f"{relationships} relationships, "
+                       f"{facts_count} facts, "
                        f"{len(result.keywords)} keywords")
 
         except Exception as e:
@@ -360,6 +369,58 @@ class BackgroundProcessor:
                 except Exception as e:
                     # FK constraint can fail if entity was deleted between add and link
                     logger.debug(f"Failed to link entity {entity_id} to file {file_id}: {e}")
+
+
+
+    def _extract_facts(self, file_id: int, text: str, path: str) -> int:
+        """
+        Extract structured facts from text using LLM.
+        
+        Args:
+            file_id: ID of the source file
+            text: Extracted text content
+            path: File path for logging
+            
+        Returns:
+            Number of facts extracted
+        """
+        try:
+            extractor = get_facts_extractor()
+            
+            # Skip if LLM not available
+            if not extractor.llm.is_available:
+                return 0
+            
+            # Delete existing facts for this file (for re-extraction)
+            self.kg.delete_facts_for_file(file_id)
+            
+            # Extract facts
+            facts = extractor.extract_facts(text, path)
+            
+            # Store facts in knowledge graph
+            count = 0
+            for fact in facts:
+                try:
+                    self.kg.add_fact(
+                        subject=fact['subject'],
+                        predicate=fact['predicate'],
+                        obj=fact['object'],
+                        confidence=fact.get('confidence', 0.8),
+                        source_file_id=file_id,
+                        context=fact.get('context', '')[:500]
+                    )
+                    count += 1
+                except Exception as e:
+                    logger.debug(f"Failed to add fact: {e}")
+            
+            if count > 0:
+                logger.debug(f"Extracted {count} facts from {path}")
+            
+            return count
+            
+        except Exception as e:
+            logger.warning(f"Facts extraction failed for {path}: {e}")
+            return 0
 
     def _detect_relationships(self, file_id: int) -> int:
         """

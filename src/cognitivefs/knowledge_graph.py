@@ -346,6 +346,41 @@ CREATE TABLE IF NOT EXISTS processing_queue (
 );
 
 CREATE INDEX IF NOT EXISTS idx_queue_status ON processing_queue(status, priority);
+-- LLM-extracted facts (subject-predicate-object triples)
+CREATE TABLE IF NOT EXISTS facts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    subject TEXT NOT NULL,
+    predicate TEXT NOT NULL,
+    object TEXT NOT NULL,
+    confidence REAL DEFAULT 0.8,
+    source_file_id INTEGER REFERENCES files(id) ON DELETE CASCADE,
+    context TEXT,
+    extracted_at INTEGER DEFAULT (strftime('%s', 'now')),
+    UNIQUE(subject, predicate, object, source_file_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_facts_subject ON facts(subject);
+CREATE INDEX IF NOT EXISTS idx_facts_predicate ON facts(predicate);
+CREATE INDEX IF NOT EXISTS idx_facts_object ON facts(object);
+CREATE INDEX IF NOT EXISTS idx_facts_file ON facts(source_file_id);
+
+-- FTS5 for facts search
+CREATE VIRTUAL TABLE IF NOT EXISTS facts_fts USING fts5(
+    subject, predicate, object, context,
+    content='facts',
+    content_rowid='id'
+);
+
+-- Triggers to keep FTS in sync
+CREATE TRIGGER IF NOT EXISTS facts_ai AFTER INSERT ON facts BEGIN
+    INSERT INTO facts_fts(rowid, subject, predicate, object, context)
+    VALUES (new.id, new.subject, new.predicate, new.object, new.context);
+END;
+
+CREATE TRIGGER IF NOT EXISTS facts_ad AFTER DELETE ON facts BEGIN
+    INSERT INTO facts_fts(facts_fts, rowid, subject, predicate, object, context)
+    VALUES ('delete', old.id, old.subject, old.predicate, old.object, old.context);
+END;
 """
 
 
@@ -830,7 +865,168 @@ class KnowledgeGraph:
         """, (entity_id,))
         return [self._row_to_file(row) for row in cursor.fetchall()]
 
-    # ==================== Embedding Operations ====================
+
+    # ==================== Facts Operations ====================
+
+    def add_fact(self, subject: str, predicate: str, obj: str,
+                 confidence: float = 0.8, source_file_id: int = None,
+                 context: str = None) -> int:
+        """
+        Add a fact (subject-predicate-object triple).
+        
+        Args:
+            subject: The subject entity
+            predicate: The relationship type (e.g., 'works_at', 'created')
+            obj: The object entity
+            confidence: Confidence score (0-1)
+            source_file_id: File this fact was extracted from
+            context: Text context where fact was found
+            
+        Returns:
+            Fact ID
+        """
+        cursor = self.conn.cursor()
+        try:
+            cursor.execute("""
+                INSERT INTO facts (subject, predicate, object, confidence,
+                                  source_file_id, context)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(subject, predicate, object, source_file_id) DO UPDATE SET
+                    confidence = MAX(facts.confidence, excluded.confidence),
+                    context = COALESCE(excluded.context, facts.context)
+            """, (subject, predicate, obj, confidence, source_file_id, context))
+            self.conn.commit()
+            
+            if cursor.lastrowid == 0:
+                cursor.execute("""
+                    SELECT id FROM facts
+                    WHERE subject = ? AND predicate = ? AND object = ?
+                    AND (source_file_id = ? OR (source_file_id IS NULL AND ? IS NULL))
+                """, (subject, predicate, obj, source_file_id, source_file_id))
+                row = cursor.fetchone()
+                return row['id'] if row else 0
+            return cursor.lastrowid
+        except Exception as e:
+            logger.error(f"Failed to add fact: {e}")
+            return 0
+
+    def get_facts_for_file(self, file_id: int) -> List[Dict]:
+        """Get all facts extracted from a specific file."""
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            SELECT id, subject, predicate, object, confidence, context, extracted_at
+            FROM facts
+            WHERE source_file_id = ?
+            ORDER BY confidence DESC
+        """, (file_id,))
+        return [dict(row) for row in cursor.fetchall()]
+
+    def search_facts(self, query: str, limit: int = 50) -> List[Dict]:
+        """Search facts using FTS5."""
+        cursor = self.conn.cursor()
+        try:
+            cursor.execute("""
+                SELECT f.id, f.subject, f.predicate, f.object, f.confidence,
+                       f.context, f.source_file_id, files.path as source_path
+                FROM facts_fts fts
+                JOIN facts f ON fts.rowid = f.id
+                LEFT JOIN files ON f.source_file_id = files.id
+                WHERE facts_fts MATCH ?
+                ORDER BY rank
+                LIMIT ?
+            """, (query, limit))
+            return [dict(row) for row in cursor.fetchall()]
+        except Exception as e:
+            logger.debug(f"Facts FTS search failed: {e}")
+            # Fallback to LIKE search
+            like_pattern = f"%{query}%"
+            cursor.execute("""
+                SELECT f.id, f.subject, f.predicate, f.object, f.confidence,
+                       f.context, f.source_file_id, files.path as source_path
+                FROM facts f
+                LEFT JOIN files ON f.source_file_id = files.id
+                WHERE f.subject LIKE ? OR f.predicate LIKE ? OR f.object LIKE ?
+                ORDER BY f.confidence DESC
+                LIMIT ?
+            """, (like_pattern, like_pattern, like_pattern, limit))
+            return [dict(row) for row in cursor.fetchall()]
+
+    def get_facts_by_subject(self, subject: str, limit: int = 50) -> List[Dict]:
+        """Get all facts about a subject."""
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            SELECT f.id, f.subject, f.predicate, f.object, f.confidence,
+                   f.context, f.source_file_id, files.path as source_path
+            FROM facts f
+            LEFT JOIN files ON f.source_file_id = files.id
+            WHERE LOWER(f.subject) = LOWER(?)
+            ORDER BY f.confidence DESC
+            LIMIT ?
+        """, (subject, limit))
+        return [dict(row) for row in cursor.fetchall()]
+
+    def get_facts_by_predicate(self, predicate: str, limit: int = 50) -> List[Dict]:
+        """Get all facts with a specific predicate/relationship type."""
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            SELECT f.id, f.subject, f.predicate, f.object, f.confidence,
+                   f.context, f.source_file_id, files.path as source_path
+            FROM facts f
+            LEFT JOIN files ON f.source_file_id = files.id
+            WHERE LOWER(f.predicate) = LOWER(?)
+            ORDER BY f.confidence DESC
+            LIMIT ?
+        """, (predicate, limit))
+        return [dict(row) for row in cursor.fetchall()]
+
+    def get_facts_about(self, entity: str, limit: int = 50) -> List[Dict]:
+        """Get all facts mentioning an entity (as subject or object)."""
+        cursor = self.conn.cursor()
+        entity_lower = entity.lower()
+        cursor.execute("""
+            SELECT f.id, f.subject, f.predicate, f.object, f.confidence,
+                   f.context, f.source_file_id, files.path as source_path
+            FROM facts f
+            LEFT JOIN files ON f.source_file_id = files.id
+            WHERE LOWER(f.subject) = ? OR LOWER(f.object) = ?
+            ORDER BY f.confidence DESC
+            LIMIT ?
+        """, (entity_lower, entity_lower, limit))
+        return [dict(row) for row in cursor.fetchall()]
+
+    def delete_facts_for_file(self, file_id: int) -> int:
+        """Delete all facts from a specific file (for re-extraction)."""
+        cursor = self.conn.cursor()
+        cursor.execute("DELETE FROM facts WHERE source_file_id = ?", (file_id,))
+        self.conn.commit()
+        return cursor.rowcount
+
+    def get_fact_stats(self) -> Dict:
+        """Get statistics about extracted facts."""
+        cursor = self.conn.cursor()
+        
+        cursor.execute("SELECT COUNT(*) as total FROM facts")
+        total = cursor.fetchone()['total']
+        
+        cursor.execute("""
+            SELECT predicate, COUNT(*) as cnt
+            FROM facts
+            GROUP BY predicate
+            ORDER BY cnt DESC
+            LIMIT 20
+        """)
+        by_predicate = {row['predicate']: row['cnt'] for row in cursor.fetchall()}
+        
+        cursor.execute("SELECT COUNT(DISTINCT source_file_id) as files FROM facts")
+        files_with_facts = cursor.fetchone()['files']
+        
+        return {
+            'total_facts': total,
+            'files_with_facts': files_with_facts,
+            'by_predicate': by_predicate
+        }
+
+        # ==================== Embedding Operations ====================
 
     def add_embedding(self, embedding: Embedding) -> int:
         """Add or update an embedding vector."""
